@@ -1,0 +1,31 @@
+<style>
+#workspace-tools{margin:16px 0;padding:14px;border:1px solid #416781;border-radius:10px;background:#0e1b2d}#workspace-tools .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}#workspace-tools p{margin:8px 0 0}#workspace-tools button{cursor:pointer}#workspace-tools select{max-width:100%}.snapshot-badge{color:#edc88b;font-weight:bold}
+</style>
+<script>
+(()=>{'use strict';
+const ctx=window.L2_CONTEXT;if(!ctx)return;
+const host=document.createElement('section');host.id='workspace-tools';host.setAttribute('aria-label','日期与快照');
+host.innerHTML='<div class="row"><strong id="workspace-mode"></strong><label>报告日期 <select id="report-date" aria-label="报告日期"></select></label><button id="open-date">查看所选日期</button><button id="build-date">计算所选日期</button><button id="save-snapshot">保存快照</button></div><div class="row" style="margin-top:10px"><label>已保存快照 <select id="snapshot-list" aria-label="已保存快照"><option value="">选择快照</option></select></label><button id="open-snapshot">查看快照</button><button id="return-live">返回最新数据</button></div><p id="workspace-status" role="status"></p><p class="muted" id="snapshot-scope"></p>';
+document.querySelector('main h1').after(host);
+const $=id=>document.getElementById(id),date=$('report-date'),status=$('workspace-status');
+const frozen=ctx.mode==='snapshot';let entries=[];
+$('workspace-mode').textContent=frozen?'快照模式 · 只读':'本地最新数据模式';$('workspace-mode').className=frozen?'snapshot-badge':'';
+$('save-snapshot').disabled=frozen||ctx.unavailable;$('build-date').disabled=frozen;
+$('snapshot-scope').textContent=frozen?`保存时间：${new Date(ctx.savedAt).toLocaleString()}。已冻结整份报告、已加载详情与 ${Object.keys(ctx.charts||{}).length} 个图表；未保存的图表不会读取最新文件。历史日期快照不证明当时已知这些结果。`:'快照保存当前报告、已加载详情/图表与筛选排序；未查看的图表标为未保存。点击保存前请等待所需图表和详情加载完成。';
+async function api(path,body){const r=await fetch(path,{cache:'no-store',...(body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{})});const d=await r.json();if(!r.ok)throw Error(d.message||'请求失败');return d;}
+function navigate(params){location.href=location.pathname+'?'+new URLSearchParams(params);}
+function explain(){const x=entries.find(x=>x.day===date.value);if(!x)return;$('open-date').disabled=x.status!=='ready';$('build-date').disabled=frozen||!x.canBuild||['queued','running'].includes(x.status);status.textContent=`${x.day}：${x.message}。`+(!x.complete?'缺少 '+x.missing.join('、')+'。':'')+(!x.canBuild?'最近7交易日不足或有缺失：'+(x.windowMissing.join('、')||'缺少交易日历/历史文件')+'。':'')+(!x.minute?'当日分钟文件缺失。':'');}
+async function lists(){entries=await api('/api/dates');date.replaceChildren();for(const x of entries){const o=document.createElement('option');o.value=x.day;o.textContent=x.day+' · '+(!x.complete?'数据不完整':x.status==='ready'?'已有报告':x.status==='stale'?'报告待更新':'报告待计算');date.append(o);}date.value=ctx.day;explain();const items=await api('/api/snapshots');$('snapshot-list').replaceChildren(new Option('选择快照',''));for(const x of items)$('snapshot-list').append(new Option(`${x.day} · ${new Date(x.savedAt).toLocaleString()} · ${x.chartCount}个图表`,x.id));if(ctx.id)$('snapshot-list').value=ctx.id;}
+date.addEventListener('change',explain);
+$('open-date').onclick=()=>navigate({date:date.value});
+$('return-live').onclick=()=>navigate({date:ctx.day});
+$('open-snapshot').onclick=()=>{if($('snapshot-list').value)navigate({snapshot:$('snapshot-list').value});};
+let timer;
+async function poll(day){try{const r=await api('/api/report/status?date='+day);status.textContent=day+'：'+r.message;if(['queued','running'].includes(r.status)){timer=setTimeout(()=>poll(day),2000);}else{await lists();date.value=day;explain();}}catch(e){status.textContent=e.message;}}
+$('build-date').onclick=async()=>{const day=date.value;$('build-date').disabled=true;try{await api('/api/report/build',{day});poll(day);}catch(e){status.textContent=e.message;$('build-date').disabled=false;}};
+$('save-snapshot').onclick=async()=>{const b=$('save-snapshot');b.disabled=true;try{if(window.L2_PENDING_CHART||document.querySelector('#compute-detail:disabled'))throw Error('有图表或详情正在加载，请完成后保存');const filters={};for(const id of ['search','filter','direction','sort','sortOrder'])filters[id]=$(id).value;const result=await api('/api/snapshots',{day:ctx.day,data:D,charts:window.L2_CAPTURE.charts,filters});await lists();$('snapshot-list').value=result.id;status.textContent=`快照已保存：${result.day}，${result.chartCount}个已加载图表。点击“查看快照”进入只读模式。`;}catch(e){status.textContent='保存失败：'+e.message;}finally{b.disabled=false;}};
+if(frozen){for(const [id,value] of Object.entries(ctx.filters||{})){const el=$(id);if(el&&['search','filter','direction','sort','sortOrder'].includes(id))el.value=value;}render();}
+lists().catch(e=>{status.textContent='管理列表不可用：'+e.message+'；已保存报告仍可阅读。';});
+window.addEventListener('pagehide',()=>clearTimeout(timer));
+})();
+</script>

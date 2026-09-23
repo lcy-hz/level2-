@@ -1,0 +1,7 @@
+{
+  "level2": "/absolute/path/data/level2",
+  "stock_minute": "/absolute/path/data/stock_minute",
+  "stk_factor_pro": "/absolute/path/stk_factor_pro/by_date",
+  "daily": "/absolute/path/daily/by_date",
+  "stock_basic": "/absolute/path/stock_basic.csv"
+}

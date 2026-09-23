@@ -1,0 +1,328 @@
+"""Loopback-only, on-demand stock detail calculations for the existing report."""
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from threading import Lock, BoundedSemaphore
+from urllib.parse import urlsplit, parse_qs
+import argparse
+import hashlib
+import json
+import re
+
+import duckdb
+
+BASE = Path(__file__).resolve().parent
+REPORT = BASE / 'level2-market-scan_20260922.html'
+from level2_paths import PATHS
+SOURCE = PATHS['level2']
+CACHE = BASE / '.level2_detail_cache'
+
+
+def add_detail_controls(html):
+    html = re.sub(r'<!-- DETAIL START -->.*?<!-- DETAIL END -->', '', html, flags=re.S)
+    html = html.replace('盘中深查仅覆盖页面重点候选；全市场部分为日级聚合。',
+                        '重点候选已预计算盘中深查；其余股票可在详情中点击计算当前报告日，结果缓存在本机。全市场历史部分仍为日级聚合。')
+    feature = (BASE / 'level2_detail_ui.html').read_text(encoding='utf-8')
+    return html.replace('</body>', '<!-- DETAIL START -->' + feature + '<!-- DETAIL END --></body>')
+
+
+def read_report(path=REPORT):
+    text = path.read_text(encoding='utf-8')
+    marker = re.search(r'const\s+D\s*=\s*', text)
+    if not marker:
+        raise ValueError('报告缺少数据载荷')
+    return json.JSONDecoder().raw_decode(text[marker.end():])[0]
+
+
+def source_identity(day, root=SOURCE):
+    audit = root / '_conversion_audit' / day
+    manifest = audit / 'manifest.json'
+    if not (audit / 'COMMITTED').is_file() or not manifest.is_file():
+        raise ValueError('源文件尚未正式提交，不能计算')
+    content = json.loads(manifest.read_text())
+    if content.get('commit_state') != 'COMMITTED':
+        raise ValueError('源数据提交状态不是 COMMITTED')
+    files = [root / f'deal_{day}.parquet', root / f'order_raw_{day}.parquet', manifest, audit / 'COMMITTED']
+    identity = [(str(p.resolve()), p.stat().st_size, p.stat().st_mtime_ns) for p in files]
+    identity.append(('calculator', hashlib.sha256(Path(__file__).read_bytes()).hexdigest()))
+    return hashlib.sha256(json.dumps(identity).encode()).hexdigest()
+
+
+def calculate(code, day, expected, progress, root=SOURCE):
+    before = source_identity(day, root)
+    con = duckdb.connect()
+    con.execute('SET threads=2')
+    con.execute("SET memory_limit='2GB'")
+    try:
+        progress('正在读取该股逐笔成交，计算五时段结构…')
+        con.execute('''CREATE TEMP TABLE ticks AS
+            SELECT TRY_CAST("时间" AS BIGINT) t, "自然日" trade_day,
+                   TRY_CAST("成交价格" AS DOUBLE)/10000 price,
+                   TRY_CAST("成交数量" AS DOUBLE) qty, "BS标志" side,
+                   CASE WHEN "BS标志"='B' THEN "叫买序号" ELSE "叫卖序号" END pid
+            FROM read_parquet(?) WHERE "万得代码"=?
+              AND TRY_CAST("成交价格" AS DOUBLE)>0 AND TRY_CAST("成交数量" AS DOUBLE)>0''',
+                    [str(root / f'deal_{day}.parquet'), code])
+        count, bad_day, amount, net = con.execute('''SELECT COUNT(*), COUNT(*) FILTER(WHERE trade_day IS NULL OR trade_day<>?),
+            SUM(price*qty), SUM(CASE WHEN side='B' THEN price*qty WHEN side='S' THEN -price*qty ELSE 0 END) FROM ticks''', [day]).fetchone()
+        if not count or bad_day:
+            raise ValueError('成交为空或交易日期不一致，未发布计算结果')
+        for value, field in [(amount, 'amount'), (net, 'net')]:
+            if abs(value - expected[field]) > max(2, abs(expected[field]) * 1e-9):
+                raise ValueError(f'{field} 与报告日级结果不一致，请更新报告后重试')
+        rows = con.execute('''SELECT CASE WHEN t<100000000 THEN '09:30–10:00'
+            WHEN t<103000000 THEN '10:00–10:30' WHEN t<=113000000 THEN '10:30–11:30'
+            WHEN t<140000000 THEN '13:00–14:00' ELSE '14:00–收盘' END segment,
+            SUM(price*qty), SUM(CASE WHEN side='B' THEN price*qty WHEN side='S' THEN -price*qty ELSE 0 END),
+            SUM(price*qty)/SUM(qty) FROM ticks
+            WHERE (t BETWEEN 93000000 AND 113000000) OR (t BETWEEN 130000000 AND 150000000)
+            GROUP BY 1 ORDER BY 1''').fetchall()
+        segments = [{'s': s, 'a': round(a), 'n': round(n), 'v': round(v, 4)} for s, a, n, v in rows]
+        progress('正在汇总主动成交关联委托…')
+        rows = con.execute('''WITH grouped AS (
+            SELECT side,pid,SUM(price*qty) amt FROM ticks WHERE side IN ('B','S') GROUP BY 1,2)
+            SELECT CASE WHEN pid IS NULL OR TRIM(pid) IN ('','0') THEN '关联键未知'
+              WHEN amt<50000 THEN '<5万' WHEN amt<200000 THEN '5–20万'
+              WHEN amt<1000000 THEN '20–100万' ELSE '≥100万' END bucket,
+              SUM(CASE WHEN side='B' THEN amt ELSE -amt END),COUNT(*) FROM grouped GROUP BY 1''').fetchall()
+        order = {'<5万': 0, '5–20万': 1, '20–100万': 2, '≥100万': 3, '关联键未知': 4}
+        parents = sorted([{'b': b, 'n': round(n), 'c': c} for b, n, c in rows], key=lambda r: order[r['b']])
+        if abs(sum(p['n'] for p in parents) - net) > len(parents) + 2:
+            raise ValueError('关联委托净额对账失败')
+        progress('正在读取 order_raw 原始委托类型与方向…')
+        rows = con.execute('''SELECT COALESCE(NULLIF(TRIM("委托类型"),''),'空'),
+            COALESCE(NULLIF(TRIM("委托代码"),''),'空'),COUNT(*),SUM(TRY_CAST("委托数量" AS DOUBLE)),
+            COUNT(*) FILTER(WHERE TRY_CAST("委托数量" AS DOUBLE) IS NULL),
+            COUNT(*) FILTER(WHERE "自然日" IS NULL OR "自然日"<>?)
+            FROM read_parquet(?) WHERE "万得代码"=? GROUP BY 1,2 ORDER BY 1,2''',
+                           [day, str(root / f'order_raw_{day}.parquet'), code]).fetchall()
+        if not rows or any(bad or bad_date for _, _, _, _, bad, bad_date in rows):
+            raise ValueError('order_raw 为空或日期/数量异常，未发布不完整结果')
+        orders = [{'t': t, 's': s, 'r': r, 'q': round(q)} for t, s, r, q, _, _ in rows]
+        if before != source_identity(day, root):
+            raise ValueError('计算期间源文件发生变化，请重新计算')
+        return {'code': code, 'day': day, 'sourceIdentity': before,
+                'computedAt': datetime.now(timezone.utc).isoformat(),
+                'segments': segments, 'parents': parents, 'orders': orders,
+                'regularCoverage': round(sum(r[1] for r in con.execute('''SELECT 1,SUM(price*qty) FROM ticks
+                   WHERE (t BETWEEN 93000000 AND 113000000) OR (t BETWEEN 130000000 AND 150000000)''').fetchall() if r[1] is not None) / amount * 100, 2),
+                'tradeRows': count, 'amount': round(amount), 'net': round(net),
+                'note': '仅报告日局部深查；关联序号不等于机构身份；order_raw 类型未解码为补撤单。'}
+    finally:
+        con.close()
+
+
+class Service:
+    def __init__(self, report=None, root=SOURCE, cache=CACHE, calculator=calculate, identity=source_identity):
+        self.report = read_report() if report is None else report
+        self.day = self.report['markets'][-1]['day']
+        self.cards = {c['code']: c for c in self.report['cards']}
+        self.root, self.cache, self.calculator = root, cache, calculator
+        self.identity = identity
+        self.jobs, self.lock = {}, Lock()
+        self.pool = ThreadPoolExecutor(max_workers=1)
+
+    def validate(self, code):
+        if not isinstance(code, str) or code not in self.cards or not re.fullmatch(r'\d{6}\.(SH|SZ)', code):
+            raise ValueError('只能计算当前报告中的股票代码')
+
+    def path(self, code):
+        return self.cache / self.day / f'{code}.json'
+
+    def status(self, code):
+        self.validate(code)
+        with self.lock:
+            job = self.jobs.get(code)
+            if job and job['status'] in ('queued', 'running', 'error'):
+                return dict(job)
+        path = self.path(code)
+        if path.is_file():
+            try:
+                result = json.loads(path.read_text())
+                if result['sourceIdentity'] == self.identity(self.day, self.root):
+                    return {'status': 'done', 'message': '已读取本地计算结果', 'result': result}
+            except (OSError, ValueError, KeyError):
+                pass
+        return {'status': 'idle', 'message': '尚未计算，或缓存已失效'}
+
+    def start(self, code):
+        state = self.status(code)
+        if state['status'] in ('done', 'queued', 'running'):
+            return state
+        with self.lock:
+            if self.jobs.get(code, {}).get('status') in ('queued', 'running'):
+                return dict(self.jobs[code])
+            if sum(j['status'] in ('queued', 'running') for j in self.jobs.values()) >= 8:
+                raise ValueError('待计算任务已满，请稍后重试')
+            self.jobs[code] = {'status': 'queued', 'message': '已排队；逐只计算以限制磁盘和内存占用'}
+            self.pool.submit(self.work, code)
+        return {'status': 'queued', 'message': '已加入本地计算队列'}
+
+    def work(self, code):
+        def progress(message):
+            with self.lock:
+                self.jobs[code] = {'status': 'running', 'message': message}
+        try:
+            progress('正在检查源数据提交状态…')
+            result = self.calculator(code, self.day, self.cards[code], progress, self.root)
+            path = self.path(code)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix('.tmp')
+            tmp.write_text(json.dumps(result, ensure_ascii=False, allow_nan=False), encoding='utf-8')
+            tmp.replace(path)
+            with self.lock:
+                self.jobs[code] = {'status': 'done', 'message': '计算完成'}
+        except Exception as exc:
+            with self.lock:
+                self.jobs[code] = {'status': 'error', 'message': f'计算失败：{exc}'}
+
+
+def make_handler(service, port, minute_service=None, workspace=None):
+    host = f'127.0.0.1:{port}'
+    chart_slots = BoundedSemaphore(2)
+    class Handler(BaseHTTPRequestHandler):
+        def allowed(self, post=False):
+            if self.headers.get('Host') != host or self.headers.get('Sec-Fetch-Site') == 'cross-site':
+                self.send_error(403)
+                return False
+            if post and self.headers.get('Origin') != 'http://' + host:
+                self.send_error(403)
+                return False
+            return True
+
+        def respond(self, data, status=200):
+            body = json.dumps(data, ensure_ascii=False, allow_nan=False).encode()
+            self.send_response(status)
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            if not self.allowed():
+                return
+            path = urlsplit(self.path).path
+            query=parse_qs(urlsplit(self.path).query)
+            day=query.get('date',[service.day])[0]
+            if workspace and path in ('/api/dates','/api/report/status','/api/snapshots'):
+                try:
+                    result=workspace.dates() if path=='/api/dates' else workspace.status(day) if path=='/api/report/status' else workspace.list_snapshots()
+                    self.respond(result)
+                except Exception as exc:self.respond({'status':'error','message':str(exc)},400)
+                return
+            if path in ('/', '/' + REPORT.name):
+                try:
+                    body = (workspace.frozen_page(query['snapshot'][0]) if 'snapshot' in query else workspace.page(day)) if workspace else REPORT.read_bytes()
+                except Exception as exc:
+                    self.respond({'status':'error','message':str(exc)},400)
+                    return
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/html; charset=utf-8')
+                self.send_header('Cache-Control', 'no-store')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            elif path.startswith('/api/detail/'):
+                try:
+                    current=workspace.get_service(day) if workspace else service
+                    self.respond(current.status(path.removeprefix('/api/detail/')))
+                except ValueError as exc:
+                    self.respond({'status': 'error', 'message': str(exc)}, 400)
+            elif path.startswith('/api/minute/') and minute_service is not None:
+                try:
+                    self.respond(minute_service.status(path.removeprefix('/api/minute/')))
+                except ValueError as exc:
+                    self.respond({'status': 'error', 'message': str(exc)}, 400)
+            elif path.startswith('/api/chart/'):
+                parts = path.split('/')
+                try:
+                    if len(parts)!=5 or parts[3] not in ('day','minute'):
+                        raise ValueError('图表请求无效')
+                    kind,code = parts[3:]
+                    current=workspace.get_service(day) if workspace else service
+                    current.validate(code)
+                except ValueError as exc:
+                    self.respond({'status':'error','message':str(exc)},400)
+                    return
+                if not chart_slots.acquire(blocking=False):
+                    self.respond({'status':'error','message':'本地读取繁忙，请移开后重新悬浮'},429)
+                    return
+                try:
+                    if kind=='day':
+                        from level2_kline import build_bundle
+                        bundle=build_bundle({code},current.day,include_volume=True)
+                        result={**bundle['series'][code], 'code':code,'day':current.day,
+                                'labels':bundle['dates'],'source':bundle['source'],'method':bundle['method']}
+                    else:
+                        from level2_intraday import calculate_intraday
+                        result=calculate_intraday(code,current.day,current.cards[code],lambda _:None,current.root)
+                    result['readAt']=datetime.now(timezone.utc).isoformat()
+                    if workspace:result['receipt']=workspace.record_chart(result,kind)
+                    self.respond({'status':'done','result':result})
+                except Exception as exc:
+                    self.respond({'status':'error','message':f'读取失败：{exc}'},500)
+                finally:
+                    chart_slots.release()
+            else:
+                self.send_error(404)
+
+        def do_POST(self):
+            if not self.allowed(post=True):
+                return
+            path=urlsplit(self.path).path
+            query=parse_qs(urlsplit(self.path).query)
+            if workspace and path in ('/api/report/build','/api/snapshots'):
+                try:
+                    size=int(self.headers.get('Content-Length','0'))
+                    if not 0<size<=32*1024*1024 or self.headers.get('Content-Type','').split(';')[0]!='application/json':raise ValueError('请求格式或长度无效')
+                    data=json.loads(self.rfile.read(size))
+                    if not isinstance(data,dict):raise ValueError('请求格式无效')
+                    self.respond(workspace.build(data.get('day')) if path=='/api/report/build' else workspace.save(data),201)
+                except Exception as exc:self.respond({'status':'error','message':str(exc)},400)
+                return
+            try:
+                current=workspace.get_service(query.get('date',[service.day])[0]) if workspace else service
+            except ValueError as exc:
+                self.respond({'status':'error','message':str(exc)},400);return
+            selected = current if path == '/api/detail' else minute_service if path == '/api/minute' else None
+            if selected is None or self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
+                self.send_error(404)
+                return
+            try:
+                size = int(self.headers.get('Content-Length', '0'))
+                if not 0 < size <= 1024:
+                    raise ValueError('请求长度无效')
+                request = json.loads(self.rfile.read(size))
+                if not isinstance(request, dict):
+                    raise ValueError('请求格式无效')
+                self.respond(selected.start(request.get('code')), 202)
+            except (ValueError, TypeError) as exc:
+                self.respond({'status': 'error', 'message': str(exc)}, 400)
+    return Handler
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--port', type=int, default=18762)
+    parser.add_argument('--install-ui', action='store_true')
+    args = parser.parse_args()
+    if args.install_ui:
+        REPORT.write_text(add_detail_controls(REPORT.read_text()), encoding='utf-8')
+        print('Installed on-demand detail controls')
+    else:
+        service = Service()
+        from level2_intraday import calculate_intraday, minute_identity
+        minute_service = Service(report=service.report, cache=BASE / '.level2_minute_cache', calculator=calculate_intraday, identity=minute_identity)
+        from level2_workspace import Workspace
+        workspace=Workspace(service)
+        server = ThreadingHTTPServer(('127.0.0.1', args.port), make_handler(service, args.port, minute_service, workspace))
+        print(f'Local Level-2 service: http://127.0.0.1:{args.port}/{REPORT.name}', flush=True)
+        try:
+            server.serve_forever()
+        finally:
+            server.server_close()
+            service.pool.shutdown(wait=False, cancel_futures=True)
+            minute_service.pool.shutdown(wait=False, cancel_futures=True)
+            workspace.pool.shutdown(wait=False, cancel_futures=True)

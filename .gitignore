@@ -1,0 +1,18 @@
+# This workspace also contains unrelated research and large local datasets.
+# Track only the explicitly maintained application files.
+/*
+!/.gitignore
+!/README.md
+!/Level2数据实战使用框架.md
+!/generate_level2_report.py
+!/validate_level2_report.py
+!/level2_detail_server.py
+!/level2_detail_ui.html
+!/level2_intraday.py
+!/level2_kline.py
+!/level2_kline_ui.html
+!/level2_paths.py
+!/level2_paths.example.json
+!/level2_workspace.py
+!/level2_workspace_ui.html
+!/test_level2_*.py
