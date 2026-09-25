@@ -72,10 +72,10 @@ class DetailTests(unittest.TestCase):
         path = self.root / f'order_raw_{self.day}.parquet'
         con = duckdb.connect()
         orders = pd.DataFrame([
-            ['600000.SH', self.day, '0', 'B', '120', '0', '11'],
-            ['600000.SH', self.day, '0', 'B', '30', '0', '11'],
-            ['600000.SH', self.day, '1', 'S', '20', '0', '14'],
-        ], columns=['万得代码', '自然日', '委托类型', '委托代码', '委托数量', '委托编号', '交易所委托号'])
+            ['600000.SH', self.day, '93000000', '0', 'B', '120', '0', '11'],
+            ['600000.SH', self.day, '93000010', '0', 'B', '30', '0', '11'],
+            ['600000.SH', self.day, '93000000', '1', 'S', '20', '0', '14'],
+        ], columns=['万得代码', '自然日', '时间', '委托类型', '委托代码', '委托数量', '委托编号', '交易所委托号'])
         con.register('orders_with_keys', orders)
         con.execute('COPY orders_with_keys TO ? (FORMAT PARQUET)', [str(path)])
         con.close()
@@ -88,6 +88,50 @@ class DetailTests(unittest.TestCase):
         self.assertEqual((exchange['repeatedKeyGroups'], exchange['multiCodeKeyGroups']), (1, 0))
         self.assertEqual((exchange['eligibleTrades'], exchange['matchedTrades'], exchange['sameCodeMatches']), (2, 2, 2))
         self.assertEqual((exchange['singleRowSameCodeMatches'], exchange['repeatedKeyMatchedTrades']), (1, 1))
+        self.assertEqual((exchange['singleRowMatchedTrades'], exchange['timeComparable']), (1, 1))
+        self.assertEqual((exchange['timeEarlier'], exchange['timeSame'], exchange['timeLater']), (1, 0, 0))
+
+    def test_order_key_time_audit_keeps_same_and_later_separate(self):
+        path = self.root / f'order_raw_{self.day}.parquet'
+        con = duckdb.connect()
+        orders = pd.DataFrame([
+            ['600000.SH', self.day, '93000000', '0', 'B', '120', '11'],
+            ['600000.SH', self.day, '110000000', '0', 'S', '20', '14'],
+        ], columns=['万得代码', '自然日', '时间', '委托类型', '委托代码', '委托数量', '交易所委托号'])
+        con.register('timed_orders', orders)
+        con.execute('COPY timed_orders TO ? (FORMAT PARQUET)', [str(path)])
+        con.close()
+        result = calculate('600000.SH', self.day, self.expected, lambda _: None, self.root)
+        audit = result['orderLinkAudit'][1]
+        self.assertEqual((audit['singleRowMatchedTrades'], audit['timeComparable']), (2, 2))
+        self.assertEqual((audit['timeEarlier'], audit['timeSame'], audit['timeLater']), (0, 1, 1))
+
+    def test_order_key_time_audit_missing_source_clock_is_unknown(self):
+        path = self.root / f'order_raw_{self.day}.parquet'
+        con = duckdb.connect()
+        orders = pd.DataFrame([['600000.SH', self.day, '0', 'B', '120', '11']],
+                              columns=['万得代码', '自然日', '委托类型', '委托代码', '委托数量', '交易所委托号'])
+        con.register('untimed_orders', orders)
+        con.execute('COPY untimed_orders TO ? (FORMAT PARQUET)', [str(path)])
+        con.close()
+        audit = calculate('600000.SH', self.day, self.expected, lambda _: None, self.root)['orderLinkAudit'][1]
+        self.assertEqual(audit['matchedTrades'], 1)
+        self.assertEqual(audit['timeFieldStatus'], 'MISSING_FIELD')
+        self.assertIsNone(audit['timeComparable'])
+
+    def test_order_key_time_audit_excludes_invalid_clocks(self):
+        path = self.root / f'order_raw_{self.day}.parquet'
+        con = duckdb.connect()
+        orders = pd.DataFrame([
+            ['600000.SH', self.day, '0', '0', 'B', '120', '11'],
+            ['600000.SH', self.day, '250000000', '0', 'S', '20', '14'],
+        ], columns=['万得代码', '自然日', '时间', '委托类型', '委托代码', '委托数量', '交易所委托号'])
+        con.register('bad_clock_orders', orders)
+        con.execute('COPY bad_clock_orders TO ? (FORMAT PARQUET)', [str(path)])
+        con.close()
+        audit = calculate('600000.SH', self.day, self.expected, lambda _: None, self.root)['orderLinkAudit'][1]
+        self.assertEqual(audit['singleRowMatchedTrades'], 2)
+        self.assertEqual((audit['timeComparable'], audit['timeEarlier'], audit['timeSame'], audit['timeLater']), (0, 0, 0, 0))
 
     def test_trade_print_path_requires_order_and_valid_prices(self):
         rows = [(1, 93000000, 120000, 100), (2, 93000000, 100000, 100),

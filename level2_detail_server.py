@@ -63,15 +63,20 @@ def order_key_audit(con, path, day, code):
         base = {'field': field, 'orderRows': order_rows, 'eligibleTrades': eligible,
                 'validOrderRows': None, 'candidateKeys': None, 'repeatedKeyGroups': None,
                 'multiCodeKeyGroups': None, 'matchedTrades': None, 'sameCodeMatches': None,
-                'singleRowSameCodeMatches': None, 'repeatedKeyMatchedTrades': None}
+                'singleRowSameCodeMatches': None, 'repeatedKeyMatchedTrades': None,
+                'singleRowMatchedTrades': None, 'timeComparable': None,
+                'timeEarlier': None, 'timeSame': None, 'timeLater': None,
+                'timeFieldStatus': 'AVAILABLE' if '时间' in columns else 'MISSING_FIELD'}
         if field not in columns:
             output.append({**base, 'status': 'MISSING_FIELD'})
             continue
+        order_time = 'MIN(TRY_CAST("时间" AS BIGINT))' if '时间' in columns else 'NULL::BIGINT'
         con.execute(f'''CREATE OR REPLACE TEMP TABLE order_key_audit AS
             SELECT TRY_CAST("{field}" AS BIGINT) pid, COUNT(*) nrows,
               COUNT(DISTINCT "委托代码") codes,
               MAX(CASE WHEN "委托代码"='B' THEN 1 ELSE 0 END) has_b,
-              MAX(CASE WHEN "委托代码"='S' THEN 1 ELSE 0 END) has_s
+              MAX(CASE WHEN "委托代码"='S' THEN 1 ELSE 0 END) has_s,
+              {order_time} order_t
             FROM read_parquet(?) WHERE "万得代码"=? AND "自然日"=?
               AND TRY_CAST("{field}" AS BIGINT)>0 GROUP BY 1''', [str(path), code, day])
         key_count, valid_rows, repeated, multi_code = con.execute('''SELECT COUNT(*),
@@ -84,12 +89,27 @@ def order_key_audit(con, path, day, code):
             COUNT(*) FILTER(WHERE o.nrows>1)
             FROM ticks t LEFT JOIN order_key_audit o USING(pid)
             WHERE t.side IN ('B','S') AND t.pid>0''').fetchone()
+        single_matched, time_comparable, earlier, same, later = (None,) * 5
+        if '时间' in columns:
+            valid_trade = '(t.t>0 AND t.t<240000000 AND (t.t//100000)%100<60 AND (t.t//1000)%100<60)'
+            valid_order = '(o.order_t>0 AND o.order_t<240000000 AND (o.order_t//100000)%100<60 AND (o.order_t//1000)%100<60)'
+            single_matched, time_comparable, earlier, same, later = con.execute(f'''SELECT
+                COUNT(*),
+                COUNT(*) FILTER(WHERE {valid_trade} AND {valid_order}),
+                COUNT(*) FILTER(WHERE {valid_trade} AND {valid_order} AND o.order_t<t.t),
+                COUNT(*) FILTER(WHERE {valid_trade} AND {valid_order} AND o.order_t=t.t),
+                COUNT(*) FILTER(WHERE {valid_trade} AND {valid_order} AND o.order_t>t.t)
+                FROM ticks t JOIN order_key_audit o USING(pid)
+                WHERE t.side IN ('B','S') AND t.pid>0 AND o.nrows=1''').fetchone()
         output.append({**base, 'status': 'AVAILABLE' if key_count else 'NO_VALID_KEYS',
                        'validOrderRows': valid_rows, 'candidateKeys': key_count,
                        'repeatedKeyGroups': repeated, 'multiCodeKeyGroups': multi_code,
                        'matchedTrades': matched, 'sameCodeMatches': same_code,
                        'singleRowSameCodeMatches': single_row,
-                       'repeatedKeyMatchedTrades': repeated_trades})
+                       'repeatedKeyMatchedTrades': repeated_trades,
+                       'singleRowMatchedTrades': single_matched,
+                       'timeComparable': time_comparable, 'timeEarlier': earlier,
+                       'timeSame': same, 'timeLater': later})
     con.execute('DROP TABLE IF EXISTS order_key_audit')
     return output
 
