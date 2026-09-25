@@ -18,3 +18,13 @@ export function sessionDefaults(days, asof) {
   if (index < 21) return null
   return { start: days[index - 20], split: days[index - 10], end: days[index - 5], asof }
 }
+
+export function findStockCode(cards, query) {
+  const value = String(query || '').trim().toLowerCase()
+  if (!value) return null
+  const exact = cards.filter(card => card.code?.toLowerCase() === value || card.name?.toLowerCase() === value)
+  if (exact.length === 1) return exact[0].code
+  if (exact.length > 1) return null
+  const partial = cards.filter(card => card.code?.toLowerCase().includes(value) || card.name?.toLowerCase().includes(value))
+  return partial.length === 1 ? partial[0].code : null
+}

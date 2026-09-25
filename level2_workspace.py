@@ -300,9 +300,18 @@ class Workspace:
             pattern_result={'result':verified['result'],'details':{c:verified['details'][c] for c in codes}}
         context['patterns']=pattern_result
         validation_result=None
+        validation_details={}
         if request.get('validationReceipt'):
             validation_result=self.validation.frozen(request['validationReceipt'])
+            codes=request.get('validationDetails',[])
+            if not isinstance(codes,list) or len(codes)>50:raise ValueError('后续研究逐股范围无效')
+            if codes:
+                if any(code not in service.cards for code in codes):raise ValueError('后续研究逐股代码不属于当前报告')
+                validation_details=self.validation.details(request['validationReceipt'],codes)
+        elif request.get('validationDetails'):
+            raise ValueError('未保存后续研究却附带逐股证据')
         context['validation']=validation_result
+        context['validationDetails']=validation_details
         ui=request.get('patternUI',{})
         if not isinstance(ui,dict) or len(encoded(ui))>10000:raise ValueError('形态视图参数无效')
         context['patternUI']=ui
@@ -315,10 +324,11 @@ class Workspace:
         bundle={'id':identifier,'day':day,'savedAt':saved,'chartCount':len(charts),'report':data,'filters':filters,
                 'stateViews':views,
                 'patterns':pattern_result,'patternUI':ui,'validation':validation_result,
+                'validationDetails':validation_details,
                 'charts':receipts,'states':states,'stateWindow':state_window,'payloadSha256':digest(data),'htmlSha256':hashlib.sha256(html.encode()).hexdigest(),
                 'reportProvenance':json.loads(provenance.read_text()) if provenance.exists() else {'status':'UNKNOWN_GENERATION_LINEAGE'},
                 'sourcesObservedAtSave':self.sources(day),
-                'scope':'整份当前报告与已加载详情；只冻结本次页面已成功读取的图表、观察窗口、形态和后续研究摘要；其余明确未保存。历史日期快照不是历史当时可得性证明。'}
+                'scope':'整份当前报告与已加载详情；只冻结本次页面已成功读取的图表、观察窗口、形态、后续研究摘要及已查看逐股证据；其余明确未保存。历史日期快照不是历史当时可得性证明。'}
         directory=self.snapshot_path(identifier);directory.mkdir(parents=True,exist_ok=False)
         (directory/'bundle.json').write_text(encoded(bundle))
         (directory/'report.html').write_text(html)
@@ -354,5 +364,6 @@ class Workspace:
                 'charts':frozen_context.get('charts',{}),
                 'patterns':frozen_context.get('patterns'),
                 'validation':frozen_context.get('validation'),
+                'validationDetails':frozen_context.get('validationDetails',{}),
                 'patternUI':frozen_context.get('patternUI',{}),
                 'filters':frozen_context.get('filters',{}),'scope':bundle['scope']}

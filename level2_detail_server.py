@@ -196,6 +196,10 @@ def make_handler(service, port, minute_service=None, workspace=None):
                 try:self.respond(workspace.validation.status(query.get('id',[''])[0]))
                 except (ValueError, OSError, KeyError) as exc:self.respond({'status':'error','message':str(exc)},400)
                 return
+            if workspace and path=='/api/validation/detail':
+                try:self.respond(workspace.validation.detail(query.get('receipt',[''])[0],query.get('code',[''])[0]))
+                except (ValueError, OSError, KeyError) as exc:self.respond({'status':'error','message':str(exc)},400)
+                return
             if workspace and path in ('/api/patterns/meta','/api/patterns/status','/api/patterns/detail'):
                 try:
                     p=workspace.patterns

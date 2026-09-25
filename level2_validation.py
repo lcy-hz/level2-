@@ -3,12 +3,16 @@
 This is not an executable strategy: the trigger is known only after its close.
 """
 import argparse
+import hashlib
 import json
 import math
+import re
+import sqlite3
 import statistics
 import uuid
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from pathlib import Path
 from threading import Lock
 from types import SimpleNamespace
@@ -26,7 +30,16 @@ def _return(start, end):
     return 100 * (end / start - 1)
 
 
-def study(flows, prices, days, start, end, asof, split, horizons=(1, 3, 5)):
+def _file_hash(path):
+    digest = hashlib.sha256()
+    with Path(path).open('rb') as source:
+        for block in iter(lambda: source.read(1024 * 1024), b''):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def study(flows, prices, days, start, end, asof, split, horizons=(1, 3, 5),
+          collect_observations=True, on_observation=None):
     """Use adjacent calendar sessions and frozen signal-day facts only.
 
     `split` is the final training date. Training events whose longest outcome
@@ -46,6 +59,11 @@ def study(flows, prices, days, start, end, asof, split, horizons=(1, 3, 5)):
         raise ValueError('起点前须有一交易日用于形成事件')
 
     observations, missing_sources = [], []
+    aggregates = defaultdict(lambda: {'events': 0, 'observed': 0, 'pending': 0, 'missingPrice': 0,
+                                      'returns': [], 'positive': 0, 'benchmarkSum': 0,
+                                      'excessSum': 0, 'excessN': 0, 'daily': defaultdict(lambda: [0, 0]),
+                                      'signalDays': set()})
+    observation_count = 0
     signal_days = days[index[start]:index[end] + 1]
     for day in signal_days:
         i = index[day]
@@ -72,40 +90,57 @@ def study(flows, prices, days, start, end, asof, split, horizons=(1, 3, 5)):
             for code, rule in events:
                 outcome = _return(current_prices.get(code), target_prices.get(code)) if maturity else None
                 status = 'PENDING' if not maturity else 'MISSING_PRICE' if outcome is None else 'OBSERVED'
-                observations.append({'day': day, 'code': code, 'rule': rule, 'cohort': cohort,
-                                     'horizon': horizon, 'targetDay': target, 'status': status,
-                                     'returnPct': outcome, 'benchmarkPct': benchmark,
-                                     'excessPct': outcome - benchmark if outcome is not None and benchmark is not None else None,
-                                     'benchmarkN': len(benchmark_returns)})
+                item = {'day': day, 'code': code, 'rule': rule, 'cohort': cohort,
+                        'horizon': horizon, 'targetDay': target, 'status': status,
+                        'previousRatio': previous[code]['ratio'], 'currentRatio': current[code]['ratio'],
+                        'deltaPP': current[code]['ratio'] - previous[code]['ratio'],
+                        'triggerClose': current_prices.get(code) if _price(current_prices.get(code)) else None,
+                        'targetClose': target_prices.get(code) if maturity and _price(target_prices.get(code)) else None,
+                        'returnPct': outcome, 'benchmarkPct': benchmark,
+                        'excessPct': outcome - benchmark if outcome is not None and benchmark is not None else None,
+                        'benchmarkN': len(benchmark_returns)}
+                observation_count += 1
+                if collect_observations:
+                    observations.append(item)
+                if on_observation:
+                    on_observation(item)
+                group = aggregates[(cohort, rule, horizon)]
+                group['events'] += 1
+                if status == 'PENDING':
+                    group['pending'] += 1
+                elif status == 'MISSING_PRICE':
+                    group['missingPrice'] += 1
+                else:
+                    group['observed'] += 1
+                    group['returns'].append(outcome)
+                    group['positive'] += outcome > 0
+                    group['benchmarkSum'] += len(benchmark_returns)
+                    group['signalDays'].add(day)
+                    if item['excessPct'] is not None:
+                        group['excessSum'] += item['excessPct']
+                        group['excessN'] += 1
+                        group['daily'][day][0] += item['excessPct']
+                        group['daily'][day][1] += 1
 
-    grouped = defaultdict(list)
-    for item in observations:
-        grouped[(item['cohort'], item['rule'], item['horizon'])].append(item)
     summary = []
-    for (cohort, rule, horizon), items in sorted(grouped.items()):
-        observed = [item for item in items if item['status'] == 'OBSERVED']
-        daily = defaultdict(list)
-        for item in observed:
-            if item['excessPct'] is not None:
-                daily[item['day']].append(item['excessPct'])
-        values = [item['returnPct'] for item in observed]
-        excess = [item['excessPct'] for item in observed if item['excessPct'] is not None]
+    for (cohort, rule, horizon), group in sorted(aggregates.items()):
+        values = group['returns']
+        n = group['observed']
         summary.append({'cohort': cohort, 'rule': rule, 'horizon': horizon,
-                        'events': len(items), 'observed': len(observed),
-                        'pending': sum(item['status'] == 'PENDING' for item in items),
-                        'missingPrice': sum(item['status'] == 'MISSING_PRICE' for item in items),
-                        'signalDays': len({item['day'] for item in observed}),
-                        'benchmarkPoolMeanN': statistics.mean(item['benchmarkN'] for item in observed) if observed else None,
+                        'events': group['events'], 'observed': n,
+                        'pending': group['pending'], 'missingPrice': group['missingPrice'],
+                        'signalDays': len(group['signalDays']),
+                        'benchmarkPoolMeanN': group['benchmarkSum'] / n if n else None,
                         'meanReturnPct': statistics.mean(values) if values else None,
                         'medianReturnPct': statistics.median(values) if values else None,
-                        'positiveShare': sum(value > 0 for value in values) / len(values) if values else None,
-                        'meanExcessPct': statistics.mean(excess) if excess else None,
-                        'equalDayMeanExcessPct': statistics.mean(statistics.mean(v) for v in daily.values()) if daily else None})
+                        'positiveShare': group['positive'] / n if n else None,
+                        'meanExcessPct': group['excessSum'] / group['excessN'] if group['excessN'] else None,
+                        'equalDayMeanExcessPct': statistics.mean(s / count for s, count in group['daily'].values()) if group['daily'] else None})
     return {'method': 'DAILY_EVENT_CLOSE_TO_CLOSE_DESCRIPTIVE_1',
             'start': start, 'end': end, 'asof': asof, 'split': split,
             'horizons': list(horizons), 'embargoSessions': max_horizon,
             'signalDaysRequested': len(signal_days), 'signalDaysMissingFlow': missing_sources,
-            'summary': summary, 'observations': observations,
+            'summary': summary, 'observations': observations, 'observationCount': observation_count,
             'limitations': ['事件仅在收盘日级数据就绪后可识别，收盘至收盘收益不是可成交策略收益',
                             'close×adj_factor 的历史当时可得性未验证；复权因子修订可改变回看结果',
                             '无入场成交、涨跌停排队、停牌退出、手续费、滑点或容量模型',
@@ -151,7 +186,8 @@ def study_identity(start, end, asof, split, horizons=(1, 3, 5)):
         state.pool.shutdown(wait=False)
 
 
-def local_study(start, end, asof, split, horizons=(1, 3, 5)):
+def local_study(start, end, asof, split, horizons=(1, 3, 5),
+                collect_observations=True, on_observation=None):
     """Read source-gated daily aggregates; never mix cached facts from changed files."""
     from level2_state import StateService, BASE
     from level2_paths import PATHS
@@ -167,7 +203,8 @@ def local_study(start, end, asof, split, horizons=(1, 3, 5)):
                 flows[day] = rows
             sources.append(source)
         prices = {day: state.prices(day) for day in price_days}
-        result = study(flows, prices, days, start, end, asof, split, horizons)
+        result = study(flows, prices, days, start, end, asof, split, horizons,
+                       collect_observations=collect_observations, on_observation=on_observation)
         if before != study_identity(start, end, asof, split, horizons):
             raise ValueError('研究期间输入来源变化，结果未发布')
         result['sourceIdentity'] = before
@@ -179,7 +216,7 @@ def local_study(start, end, asof, split, horizons=(1, 3, 5)):
 
 
 class ValidationService:
-    """One bounded local study at a time; snapshots freeze only verified summaries."""
+    """One bounded local study at a time; detail lookups never rescan Level-2."""
     def __init__(self, base=None, calculator=local_study, identity=study_identity):
         self.base = Path(base) if base is not None else Path(__file__).resolve().parent
         self.receipts = self.base / '.level2_validation_receipts'
@@ -217,12 +254,46 @@ class ValidationService:
         with self.lock:
             self.jobs[job_id] = {'status': 'running', 'message': '正在核对来源并计算后续收益', 'args': args}
         try:
-            result = self.calculator(*args)
-            result['observationCount'] = len(result.pop('observations'))
             token = uuid.uuid4().hex
             self.receipts.mkdir(exist_ok=True)
+            database = self.receipts / f'{token}.sqlite'
+            temporary = self.receipts / f'{token}.building.sqlite'
+            try:
+                with closing(sqlite3.connect(temporary)) as connection:
+                    with connection:
+                        connection.execute('''CREATE TABLE observation (
+                            code TEXT, day TEXT, rule TEXT, cohort TEXT, horizon INTEGER, targetDay TEXT,
+                            status TEXT, previousRatio REAL, currentRatio REAL, deltaPP REAL,
+                            triggerClose REAL, targetClose REAL, returnPct REAL, benchmarkPct REAL,
+                            excessPct REAL, benchmarkN INTEGER)''')
+                        columns = ('code', 'day', 'rule', 'cohort', 'horizon', 'targetDay', 'status',
+                                   'previousRatio', 'currentRatio', 'deltaPP', 'triggerClose', 'targetClose',
+                                   'returnPct', 'benchmarkPct', 'excessPct', 'benchmarkN')
+                        buffer = []
+                        inserted = 0
+                        insert_sql = 'INSERT INTO observation VALUES (' + ','.join('?' for _ in columns) + ')'
+                        def flush():
+                            nonlocal inserted
+                            if buffer:
+                                connection.executemany(insert_sql, buffer)
+                                inserted += len(buffer)
+                                buffer.clear()
+                        def emit(row):
+                            buffer.append(tuple(row.get(key) for key in columns))
+                            if len(buffer) >= 1000:
+                                flush()
+                        result = self.calculator(*args, collect_observations=False, on_observation=emit)
+                        flush()
+                        if result.get('observationCount') != inserted:
+                            raise ValueError('逐股证据与汇总数量对账失败')
+                        result.pop('observations', None)
+                        connection.execute('CREATE INDEX observation_code ON observation(code, day, horizon)')
+                temporary.replace(database)
+            finally:
+                temporary.unlink(missing_ok=True)
             from level2_state import sha
-            record = {'result': result, 'dataSha256': sha(result)}
+            record = {'result': result, 'dataSha256': sha(result),
+                      'observationsSha256': _file_hash(database)}
             (self.receipts / f'{token}.json').write_text(json.dumps(record, ensure_ascii=False, allow_nan=False))
             with self.lock:
                 self.jobs[job_id] = {'status': 'done', 'message': '描述性研究完成', 'args': args,
@@ -249,10 +320,38 @@ class ValidationService:
         result = record['result']
         if record.get('dataSha256') != sha(result):
             raise ValueError('后续收益凭据内容校验失败')
+        database = self.receipts / f'{token}.sqlite'
+        if record.get('observationsSha256') != _file_hash(database):
+            raise ValueError('后续收益逐股证据校验失败')
         args = (result['start'], result['end'], result['asof'], result['split'], tuple(result['horizons']))
         if result['sourceIdentity'] != self.identity(*args):
             raise ValueError('后续收益研究来源已变化，不能冻结旧结果')
         return result
+
+    def details(self, token, codes):
+        from level2_contract import PAT
+        if (not isinstance(codes, list) or not 1 <= len(codes) <= 50
+                or any(not isinstance(code, str) or not re.fullmatch(PAT, code) for code in codes)
+                or len(set(codes)) != len(codes)):
+            raise ValueError('逐股证据范围无效，最多50只不重复A股')
+        result = self.frozen(token)
+        database = self.receipts / f'{token}.sqlite'
+        with closing(sqlite3.connect(database.as_uri() + '?mode=ro', uri=True)) as connection:
+            connection.row_factory = sqlite3.Row
+            query = ('SELECT * FROM observation WHERE code IN (' + ','.join('?' for _ in codes) +
+                     ') ORDER BY code, day DESC, horizon ASC')
+            rows = [dict(row) for row in connection.execute(query, codes)]
+        grouped = defaultdict(list)
+        for row in rows:
+            grouped[row['code']].append(row)
+        return {code: {'code': code, 'start': result['start'], 'end': result['end'], 'asof': result['asof'],
+                       'sourceIdentity': result['sourceIdentity'], 'observations': grouped[code],
+                       'status': 'AVAILABLE' if grouped[code] else 'NO_EVENT',
+                       'scope': '仅所选研究窗口内已识别的日级事件；未来价格不进入触发日证据。'}
+                for code in codes}
+
+    def detail(self, token, code):
+        return self.details(token, [code])[code]
 
 
 def main():
@@ -263,7 +362,8 @@ def main():
     parser.add_argument('--details', action='store_true', help='输出逐股事件明细')
     args = parser.parse_args()
     horizons = tuple(int(x) for x in args.horizons.split(','))
-    result = local_study(args.start, args.end, args.asof, args.split, horizons)
+    result = local_study(args.start, args.end, args.asof, args.split, horizons,
+                         collect_observations=args.details)
     if not args.details:
         result.pop('observations')
     print(json.dumps(result, ensure_ascii=False, allow_nan=False, indent=2))

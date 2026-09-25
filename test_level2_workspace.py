@@ -138,14 +138,19 @@ class WorkspaceTests(unittest.TestCase):
     def test_snapshot_freezes_verified_validation_without_live_backfill(self):
         study={'start':'20260901','end':'20260907','asof':'20260907','split':'20260905',
                'summary':[{'rule':'SELL_EASING','observed':12}], 'sourceIdentity':'fixture'}
-        self.w._validation=SimpleNamespace(frozen=lambda token: study if token=='a'*32 else self._invalid_validation())
+        detail={'code':'000001.SZ','observations':[{'day':'20260907','horizon':1,'returnPct':None,'status':'PENDING'}]}
+        self.w._validation=SimpleNamespace(frozen=lambda token: study if token=='a'*32 else self._invalid_validation(),
+                                           details=lambda token,codes: {'000001.SZ':detail})
         saved=self.w.save({'day':'20260907','data':self.data,'validationReceipt':'a'*32,
-                           'patternUI':{'tab':'validation'}})
+                           'validationDetails':['000001.SZ'],'patternUI':{'tab':'validation'}})
         frozen=self.w.snapshot_document(saved['id'])
         self.assertEqual(frozen['validation'],study)
+        self.assertEqual(frozen['validationDetails']['000001.SZ'],detail)
         self.assertEqual(frozen['patternUI']['tab'],'validation')
         with self.assertRaises(ValueError):
             self.w.save({'day':'20260907','data':self.data,'validationReceipt':'b'*32})
+        with self.assertRaises(ValueError):
+            self.w.save({'day':'20260907','data':self.data,'validationDetails':['000001.SZ']})
 
     @staticmethod
     def _invalid_validation():

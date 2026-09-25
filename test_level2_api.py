@@ -24,7 +24,9 @@ class ReportApiTests(unittest.TestCase):
             get_service=lambda day: self.service if day=='20260922' else self._invalid(),
             validation=SimpleNamespace(start=lambda request: {'id':'a'*32,'status':'queued'},
                 status=lambda job: {'status':'done','receipt':'b'*32,'result':{'start':'20260901','summary':[]}}
-                if job=='a'*32 else self._invalid()),
+                if job=='a'*32 else self._invalid(),
+                detail=lambda token,code: {'code':code,'status':'NO_EVENT','observations':[]}
+                if token=='b'*32 and code=='000001.SZ' else self._invalid()),
             state=SimpleNamespace(status=lambda day,window: {'status':'done','receipt':'proof',
                 'result':{'day':day,'window':window,'states':{'000001.SZ':{'history':[
                     {'day':'20260922','amount':100,'net':10,'ratio':10,'unknown':0}]}},
@@ -80,6 +82,7 @@ class ReportApiTests(unittest.TestCase):
         with urlopen(request) as response:
             self.assertEqual(json.load(response)['id'],'a'*32)
         self.assertEqual(self.fetch('/api/validation/status?id='+'a'*32)['result']['summary'],[])
+        self.assertEqual(self.fetch('/api/validation/detail?receipt='+'b'*32+'&code=000001.SZ')['status'],'NO_EVENT')
         bad=Request(url,data=body,headers={'Content-Type':'application/json','Origin':'https://other.invalid'},method='POST')
         with self.assertRaises(HTTPError) as context:urlopen(bad)
         self.assertEqual(context.exception.code,403)

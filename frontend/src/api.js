@@ -22,6 +22,7 @@ export const stateView = (day, window) => getJson(`/api/state/view?date=${encode
 export const stateMeta = () => getJson('/api/state/meta')
 export const startValidation = request => postJson('/api/validation', request)
 export const validationStatus = id => getJson(`/api/validation/status?id=${encodeURIComponent(id)}`)
+export const validationDetail = (receipt, code) => getJson(`/api/validation/detail?receipt=${encodeURIComponent(receipt)}&code=${encodeURIComponent(code)}`)
 export const chart = (kind, code, day, signal) => getJson(`/api/chart/${kind}/${encodeURIComponent(code)}?date=${encodeURIComponent(day)}`, { signal })
 export const detailStatus = (code, day) => getJson(`/api/detail/${encodeURIComponent(code)}?date=${encodeURIComponent(day)}`)
 export const startDetail = (code, day) => postJson(`/api/detail?date=${encodeURIComponent(day)}`, { code })

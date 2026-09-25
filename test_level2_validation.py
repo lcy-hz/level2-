@@ -83,10 +83,15 @@ class ValidationTests(unittest.TestCase):
 
     def test_background_receipt_freezes_summary_and_rejects_changed_source(self):
         identity = ['source-a']
-        def calculate(start, end, asof, split, horizons):
+        def calculate(start, end, asof, split, horizons, collect_observations=True, on_observation=None):
+            observation = {'day': start, 'code': '000001.SZ', 'rule': 'SELL_EASING',
+                           'horizon': 1, 'status': 'OBSERVED', 'returnPct': 2.5}
+            if on_observation:on_observation(observation)
             return {'start': start, 'end': end, 'asof': asof, 'split': split,
                     'horizons': list(horizons), 'sourceIdentity': identity[0],
-                    'summary': [], 'observations': [{'day': start}], 'limitations': []}
+                    'summary': [], 'observations': [observation] if collect_observations else [],
+                    'observationCount': 1,
+                    'limitations': []}
         with tempfile.TemporaryDirectory() as temp:
             service = ValidationService(Path(temp), calculator=calculate, identity=lambda *args: identity[0])
             with patch.object(service, 'request', return_value=('20260915', '20260917', '20260918', '20260916', (1,))):
@@ -96,6 +101,13 @@ class ValidationTests(unittest.TestCase):
             self.assertEqual((ready['status'], ready['result']['observationCount']), ('done', 1))
             self.assertNotIn('observations', ready['result'])
             self.assertEqual(service.frozen(ready['receipt'])['start'], '20260915')
+            detail = service.detail(ready['receipt'], '000001.SZ')
+            self.assertEqual((detail['status'], detail['observations'][0]['returnPct']), ('AVAILABLE', 2.5))
+            self.assertEqual(service.detail(ready['receipt'], '000002.SZ')['status'], 'NO_EVENT')
+            with self.assertRaises(ValueError):
+                service.detail(ready['receipt'], '../bad')
+            with self.assertRaises(ValueError):
+                service.details(ready['receipt'], ['000001.SZ', '000001.SZ'])
             identity[0] = 'source-b'
             self.assertEqual(service.status(job['id'])['status'], 'stale')
             with self.assertRaisesRegex(ValueError, '来源已变化'):
@@ -108,6 +120,26 @@ class ValidationTests(unittest.TestCase):
             stored.write_text(json.dumps(content))
             with self.assertRaisesRegex(ValueError, '内容校验失败'):
                 service.frozen(ready['receipt'])
+
+    def test_observation_database_tampering_rejected(self):
+        def calculate(*args, collect_observations=True, on_observation=None):
+            observation = {'code': '000001.SZ', 'day': args[0]}
+            if on_observation:on_observation(observation)
+            return {'start': args[0], 'end': args[1], 'asof': args[2], 'split': args[3],
+                    'horizons': list(args[4]), 'sourceIdentity': 'same',
+                    'summary': [], 'observations': [observation] if collect_observations else [],
+                    'observationCount': 1}
+        with tempfile.TemporaryDirectory() as temp:
+            service = ValidationService(Path(temp), calculator=calculate, identity=lambda *args: 'same')
+            with patch.object(service, 'request', return_value=('20260915', '20260917', '20260918', '20260916', (1,))):
+                job = service.start({})
+            service.pool.shutdown(wait=True)
+            token = service.status(job['id'])['receipt']
+            database = Path(temp)/'.level2_validation_receipts'/f'{token}.sqlite'
+            with database.open('ab') as output:
+                output.write(b'changed')
+            with self.assertRaisesRegex(ValueError, '逐股证据校验失败'):
+                service.detail(token, '000001.SZ')
 
     def test_equal_day_average_is_not_stock_count_weighted(self):
         flows = {
@@ -127,6 +159,22 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(same_rule['benchmarkPoolMeanN'], 3)
         self.assertAlmostEqual(same_rule['meanExcessPct'], 40 / 9)
         self.assertAlmostEqual(same_rule['equalDayMeanExcessPct'], 10 / 3)
+
+    def test_streamed_summary_matches_collected_observations(self):
+        flows = {'20260914': {'A': flow(-4), 'B': flow(-4)},
+                 '20260915': {'A': flow(-2), 'B': flow(-1)},
+                 '20260916': {'A': flow(1), 'B': flow(-3)}}
+        prices = {'20260915': {'A': 100, 'B': 100},
+                  '20260916': {'A': 102, 'B': 99},
+                  '20260917': {'A': 103, 'B': 100}}
+        args = (flows, prices, DAYS, '20260915', '20260916', '20260917', '20260915', (1,))
+        collected = study(*args)
+        emitted = []
+        streamed = study(*args, collect_observations=False, on_observation=emitted.append)
+        self.assertEqual(streamed['observations'], [])
+        self.assertEqual(streamed['observationCount'], len(collected['observations']))
+        self.assertEqual(emitted, collected['observations'])
+        self.assertEqual(streamed['summary'], collected['summary'])
 
 
 if __name__ == '__main__':
