@@ -24,6 +24,7 @@ class StateViewTests(unittest.TestCase):
         self.assertEqual(view['trajectory'][1]['buyShare'],100)
         self.assertEqual(view['counts'],{'improve':1,'worsen':1,'flat':0,'unknown':1,'toBuy':1,'toSell':0})
         self.assertEqual([s['code'] for s in view['stocks']],['A','B','C'])
+        self.assertIsNone(view['eventMethod'])
 
     def test_unknown_one_day_micro_change_and_empty(self):
         self.assertIsNone(derive({'window':2,'states':{'C':{'history':[row('1',50,None),row('2',50,5)]}}})['trajectory'][0]['ratio'])
@@ -33,7 +34,7 @@ class StateViewTests(unittest.TestCase):
         self.assertEqual(derive({'window':2,'states':{}})['common'],0)
 
     def test_matches_legacy_presentation_model_on_contract_fixture(self):
-        result={'day':'20260922','window':2,'states':{
+        result={'day':'20260922','window':2,'eventMethod':'日级事件口径','states':{
             'A':{'history':[row('20260921',100,-10),row('20260922',100,10)]},
             'B':{'history':[row('20260921',900,20),row('20260922',900,10)]},
             'C':{'history':[row('20260921',50,None),row('20260922',50,5)]}}}
@@ -42,6 +43,7 @@ class StateViewTests(unittest.TestCase):
                               input=json.dumps(result),text=True,capture_output=True,check=True,timeout=10)
         old=json.loads(output.stdout);new=derive(result)
         self.assertEqual(new['counts'],old['counts'])
+        self.assertEqual(new['eventMethod'],old['eventMethod'])
         self.assertEqual(new['common'],old['common'])
         self.assertEqual([row['code'] for row in new['stocks']],[row['code'] for row in old['stocks']])
         for a,b in zip(new['trajectory'],old['trajectory']):

@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, ref } from 'vue'
 import { startState, stateView } from '../api.js'
 import KlineTrigger from './KlineTrigger.vue'
+import StateEventPanel from './StateEventPanel.vue'
 
 const props = defineProps({
   day: { type: String, required: true }, cards: { type: Array, required: true },
@@ -86,6 +87,7 @@ onBeforeUnmount(() => { sequence++; clearTimeout(timer) })
       <div class="section-heading state-subheading"><div><h3>结构变化统计</h3><p class="footnote">{{ view.applicable ? view.dates.at(-2) + ' → ' + view.dates.at(-1) : '单日窗口无前一交易日' }}；有效比较 {{ view.applicable ? view.total - view.counts.unknown : 0 }} / {{ view.total }} 只。</p></div></div>
       <div v-if="view.applicable" class="state-counts"><button v-for="key in ['improve','worsen','flat','unknown']" :key="key" :class="{ active: change === key }" @click="resetFilter(key)"><span>{{ label[key] }}</span><strong>{{ view.counts[key].toLocaleString() }}</strong></button></div>
       <p v-if="view.applicable" class="footnote">净卖出转净买入 {{ view.counts.toBuy }} 只；净买入转净卖出 {{ view.counts.toSell }} 只。价格方向与资金变化独立判断。</p>
+      <StateEventPanel :view="view" :names="names" :frozen="frozen" />
       <div class="state-list-head"><h3>个股逐日证据</h3><div><input v-model="query" @input="page = 1" placeholder="搜索代码或名称" aria-label="连续状态股票搜索" /><select v-model="change" @change="page = 1" aria-label="资金变化筛选"><option value="all">全部变化</option><option v-for="key in ['improve','worsen','flat','unknown']" :key="key" :value="key">{{ label[key] }}</option></select></div></div>
       <p class="footnote">匹配 {{ filtered.length }} 只 · 每页 20 只 · 代码升序</p>
       <div class="state-stocks"><article v-for="stock in shown" :key="stock.code" class="subpanel"><div class="state-stock-title"><strong>{{ names[stock.code] || '名称未知' }} <KlineTrigger :code="stock.code" :name="names[stock.code] || ''" :day="day" :frozen="frozen" :snapshot-charts="snapshotCharts" @loaded="emit('chart-loaded', $event)" /></strong><span>{{ view.applicable ? label[stock.change] : '单日观察' }}</span></div><p>区间价格 {{ number(stock.priceReturn) }} · 当前净额比 <b :class="tone(stock.level)">{{ number(stock.level) }}</b></p><p>日变化 {{ view.applicable ? number(stock.viewDelta, ' pp') : '不适用' }} · 窗口加权 {{ number(stock.weighted) }}</p><small>方向有效 {{ stock.valid }}/{{ stock.expected }} 日 · 连续同向 {{ stock.streak ?? '未知' }} 日</small><details><summary>逐日证据</summary><p v-for="row in stock.history" :key="row.day">{{ row.day }} · 成交额 {{ money(row.amount) }} · 净额比 {{ number(row.ratio) }} · {{ row.reason || '方向记录可用' }}</p></details></article></div>

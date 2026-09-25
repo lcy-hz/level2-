@@ -30,6 +30,19 @@ def digest(value):
     return hashlib.sha256(encoded(value).encode()).hexdigest()
 
 
+def report_sources_match(recorded, current):
+    """Ignore only the state calculator's implementation; calendar path/data remain gated."""
+    if (not isinstance(recorded, dict) or not isinstance(recorded.get('sources'), list)
+            or not all(isinstance(item, dict) for item in recorded['sources'])
+            or not all(isinstance(item, dict) for item in current)):
+        return False
+    if digest(recorded['sources']) != recorded.get('sourceDigest'):
+        return False
+    ignored = str(BASE/'level2_state.py')
+    trim = lambda items: [item for item in items if item.get('path') != ignored]
+    return digest(trim(recorded['sources'])) == digest(trim(current))
+
+
 class Workspace:
     def __init__(self,service,base=BASE,calendar=None):
         from level2_state import settings
@@ -79,7 +92,7 @@ class Workspace:
         # changes do not, while name data and imported calculators do.
         result.extend(fingerprint(self.base/p) for p in [
             'generate_level2_report.py','level2_contract.py','level2_quality.py',
-            'level2_state.py','level2_paths.py','level2_kline.py',
+            'level2_paths.py','level2_kline.py',
             'level2_kline_ui.html','level2_report_html.py','level2_detail_ui.html'])
         return result
 
@@ -121,7 +134,7 @@ class Workspace:
                 return {'status':'stale','message':'数据源已切换，旧报告来源不能确认，请重新计算'}
             if meta.is_file():
                 try:
-                    if json.loads(meta.read_text())['sourceDigest']!=digest(self.sources(day)):
+                    if not report_sources_match(json.loads(meta.read_text()),self.sources(day)):
                         return {'status':'stale','message':'源文件已变化，报告待重新计算'}
                 except (ValueError,KeyError):return {'status':'stale','message':'报告指纹无效'}
             return {'status':'ready','message':'报告可查看'+('（旧报告未记录生成时源指纹）' if not meta.is_file() else '')}

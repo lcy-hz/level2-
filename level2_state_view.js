@@ -11,7 +11,7 @@ function derive(result){
  const counts={improve:0,worsen:0,flat:0,unknown:0,toBuy:0,toSell:0};
  const applicable=dates.length>=2&&result.window>1;
  const stocks=rows.map(s=>{const a=s.byDay[dates.at(-2)],b=s.byDay[dates.at(-1)],delta=applicable&&usable(a)&&usable(b)?b.ratio-a.ratio:null,change=delta===null?'unknown':delta>0?'improve':delta<0?'worsen':'flat';if(applicable){counts[change]++;if(delta!==null){if(a.ratio<0&&b.ratio>0)counts.toBuy++;if(a.ratio>0&&b.ratio<0)counts.toSell++;}}const {byDay,...rest}=s;return {...rest,viewDelta:delta,change};}).sort((a,b)=>a.code.localeCompare(b.code));
- return {method:'continuous-common-cohort-20260923',day:result.day,window:result.window,dates,total:rows.length,common:common.length,trajectory,applicable,counts,stocks};
+ return {method:'continuous-common-cohort-20260923',eventMethod:result.eventMethod||null,day:result.day,window:result.window,dates,total:rows.length,common:common.length,trajectory,applicable,counts,stocks};
 }
 function matches(s,f={}){
  const sign=(v,k)=>!k||k==='all'||(finite(v)&&(k==='positive'?v>0:k==='negative'?v<0:v===0));

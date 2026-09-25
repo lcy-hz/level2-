@@ -20,6 +20,8 @@ class StateTests(unittest.TestCase):
         s=compute(rows,DAYS,DAYS[-1],3)
         self.assertEqual((s['streak'],s['improve'],s['sign']),(3,2,-1))
         self.assertTrue(s['leftCensored']);self.assertTrue(s['improveCensored'])
+        self.assertEqual([(event['kind'],event['triggerDay']) for event in s['events']],
+                         [('SELL_EASING',DAYS[-2]),('SELL_EASING',DAYS[-1])])
 
     def test_gap_and_unknown(self):
         rows={DAYS[-3]:row(-8),DAYS[-1]:row(-2)}
@@ -33,6 +35,7 @@ class StateTests(unittest.TestCase):
         rows={DAYS[-2]:row(-6),DAYS[-1]:row(-2)}
         a=compute(rows,DAYS,DAYS[-1],1)
         self.assertIsNone(a['slope']);self.assertEqual(a['delta'],4)
+        self.assertEqual(a['events'],[])
         rows['20260923']=row(100)
         self.assertEqual(a,compute(rows,DAYS+['20260923'],DAYS[-1],1))
 

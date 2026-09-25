@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 import duckdb
 from level2_contract import calendar
+from level2_events import observe
 
 BASE=Path(__file__).resolve().parent
 CONFIG=BASE/'level2_research.json'
@@ -69,6 +70,7 @@ def compute(rows, days, day, window):
     baseline=rows.get(days[baseidx]) if baseidx>=0 else None
     prices=[baseline,*series]
     price_ok=len(dates)==window and all(r and r.get('adjusted',0)>0 for r in prices)
+    history=[{'day':d,**(r or {}),'reason':(r or {}).get('reason') or ('方向记录可用' if usable(r) else '缺成交记录或方向未知／停牌未核实')} for d,r in zip(dates,series)]
     return {'level':level,'delta':delta,'weighted':100*sum(r['net'] for r in flows)/sum(r['amount'] for r in flows) if full else None,
             'slope':slope,'sign':sign(level) if level is not None else None,'streak':streak,'leftCensored':left,
             'improve':improve,'worsen':worsen,'improveCensored':improve is not None and len(series)>1 and improve==len(series)-1,
@@ -79,7 +81,7 @@ def compute(rows, days, day, window):
             'amountChange':change_amount,'meanAmount':sum(r['amount'] for r in amounts)/window if complete_amount else None,
             'priceReturn':100*(prices[-1]['adjusted']/prices[0]['adjusted']-1) if price_ok else None,
             'start':dates[0] if dates else None,'end':day,
-            'history':[{'day':d,**(r or {}),'reason':(r or {}).get('reason') or ('方向记录可用' if usable(r) else '缺成交记录或方向未知／停牌未核实')} for d,r in zip(dates,series)]}
+            'history':history,'events':observe(history)}
 
 class StateService:
     def __init__(self,workspace):
@@ -108,7 +110,7 @@ class StateService:
     def identity(self,day,window):
         from level2_paths import PATHS
         days=self.validate(day,window);dates=[d for d in days if d<=day][-window-1:]
-        items=[stamp(settings()['trade_calendar']),stamp(CONFIG),stamp(Path(__file__)),stamp(BASE/'level2_contract.py'),settings()]
+        items=[stamp(settings()['trade_calendar']),stamp(CONFIG),stamp(Path(__file__)),stamp(BASE/'level2_contract.py'),stamp(BASE/'level2_events.py'),settings()]
         for d in dates:
             p=self.source(d)
             items.extend([stamp(p) if p else [d,'missing'],stamp(PATHS['stk_factor_pro']/f'{d}_stk_factor_pro.csv')])
@@ -206,6 +208,7 @@ class StateService:
             states={code:compute({d:rows[code] for d,rows in allrows.items() if code in rows},days,day,window) for code in service.cards}
             if identity!=self.identity(day,window):raise ValueError('计算期间来源变化，结果未发布')
             result={'day':day,'window':window,'states':states,'sources':sources,'identity':identity,
+                    'eventMethod':'相邻交易日日级主动净额比严格变号或负值变化；状态仅随窗口内后续有效观测更新；未知不跨越',
                     'priceMethod':'本地 close×adj_factor 比值；N日收益使用窗口前一交易日为基点；历史当时可得性未验证',
                     'scope':'日级价格／成交额／已识别主动方向。已校准旧来源0买1卖，逐条买卖编号复核；未校准来源及冲突记录未知。无自动吸筹、支撑或买卖触发。'}
             token=uuid.uuid4().hex;self.receipts.mkdir(exist_ok=True)

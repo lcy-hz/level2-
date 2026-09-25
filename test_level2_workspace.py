@@ -5,10 +5,21 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
-from level2_workspace import Workspace
+from level2_workspace import Workspace, BASE, digest, report_sources_match
 
 
 class WorkspaceTests(unittest.TestCase):
+    def test_report_source_gate_ignores_only_state_calculator_code(self):
+        base=[{'path':'/data/deal.parquet','bytes':42,'mtimeNs':1},
+              {'path':str(BASE/'level2_state.py'),'bytes':100,'mtimeNs':1},
+              {'path':'/code/generate_level2_report.py','bytes':80,'mtimeNs':1}]
+        saved={'sources':base,'sourceDigest':digest(base)}
+        current=[base[0],base[2]]
+        self.assertTrue(report_sources_match(saved,current))
+        self.assertFalse(report_sources_match(saved,[{**base[0],'mtimeNs':2},base[2]]))
+        self.assertFalse(report_sources_match(saved,[base[0],{**base[2],'bytes':81}]))
+        self.assertFalse(report_sources_match({**saved,'sourceDigest':'forged'},current))
+
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.base=Path(self.temp.name)
         self.root=self.base/'level2';self.root.mkdir()
