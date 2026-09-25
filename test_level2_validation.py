@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-from level2_validation import study, ValidationService, entry_gate
+from level2_validation import study, ValidationService, entry_gate, close_path_drawdown
 
 
 DAYS = ['20260914', '20260915', '20260916', '20260917', '20260918',
@@ -16,6 +16,39 @@ def flow(ratio):
 
 
 class ValidationTests(unittest.TestCase):
+    def test_close_path_drawdown_requires_every_session_and_keeps_zero(self):
+        path = [('20260915', 100), ('20260916', 110), ('20260917', 99)]
+        drawdown, peak, trough = close_path_drawdown(path)
+        self.assertAlmostEqual(drawdown, -10)
+        self.assertEqual((peak, trough), ('20260916', '20260917'))
+        self.assertEqual(close_path_drawdown(path[:2]), (0.0, None, None))
+        self.assertEqual(close_path_drawdown([path[0], ('20260916', None), path[2]]),
+                         (None, None, None))
+
+    def test_drawdown_path_does_not_reclassify_endpoint_return(self):
+        flows = {'20260914': {'A': flow(-4)}, '20260915': {'A': flow(-2)}}
+        prices = {'20260915': {'A': 100}, '20260916': {},
+                  '20260917': {'A': 90}, '20260918': {'A': 105}}
+        result = study(flows, prices, DAYS, '20260915', '20260916', '20260918',
+                       '20260915', (3,))
+        row = result['observations'][0]
+        self.assertEqual(row['status'], 'OBSERVED')
+        self.assertAlmostEqual(row['returnPct'], 5)
+        self.assertEqual((row['closeDrawdownStatus'], row['maxCloseDrawdownPct']),
+                         ('MISSING_PRICE', None))
+        self.assertEqual(result['summary'][0]['closeDrawdownObserved'], 0)
+        prices['20260916'] = {'A': 110}
+        complete = study(flows, prices, DAYS, '20260915', '20260916', '20260918',
+                         '20260915', (3,))
+        self.assertEqual(complete['observations'][0]['closeDrawdownStatus'], 'OBSERVED')
+        self.assertAlmostEqual(complete['observations'][0]['maxCloseDrawdownPct'],
+                               100 * (90 / 110 - 1))
+        self.assertEqual(complete['summary'][0]['closeDrawdownObserved'], 1)
+        pending = study(flows, prices, DAYS, '20260915', '20260916', '20260917',
+                        '20260915', (3,))['observations'][0]
+        self.assertEqual((pending['closeDrawdownStatus'], pending['maxCloseDrawdownPct']),
+                         ('PENDING', None))
+
     def test_next_day_bar_gate_never_claims_fill(self):
         self.assertEqual(entry_gate(None), 'MISSING_BAR')
         self.assertEqual(entry_gate((None, 11, 9, 10, 100)), 'MISSING_PRICE')
@@ -117,7 +150,9 @@ class ValidationTests(unittest.TestCase):
         def calculate(start, end, asof, split, horizons, collect_observations=True, on_observation=None):
             observation = {'day': start, 'code': '000001.SZ', 'rule': 'SELL_EASING',
                            'horizon': 1, 'status': 'OBSERVED', 'returnPct': 2.5,
-                           'entryDay': '20260916', 'entryGate': 'ONE_PRICE_SESSION'}
+                           'entryDay': '20260916', 'entryGate': 'ONE_PRICE_SESSION',
+                           'closeDrawdownStatus': 'OBSERVED', 'maxCloseDrawdownPct': -1.5,
+                           'drawdownPeakDay': '20260915', 'drawdownTroughDay': '20260916'}
             if on_observation:on_observation(observation)
             return {'start': start, 'end': end, 'asof': asof, 'split': split,
                     'horizons': list(horizons), 'sourceIdentity': identity[0],
@@ -137,6 +172,8 @@ class ValidationTests(unittest.TestCase):
             self.assertEqual((detail['status'], detail['observations'][0]['returnPct']), ('AVAILABLE', 2.5))
             self.assertEqual((detail['observations'][0]['entryDay'], detail['observations'][0]['entryGate']),
                              ('20260916', 'ONE_PRICE_SESSION'))
+            self.assertEqual((detail['observations'][0]['maxCloseDrawdownPct'],
+                              detail['observations'][0]['drawdownTroughDay']), (-1.5, '20260916'))
             self.assertEqual(service.detail(ready['receipt'], '000002.SZ')['status'], 'NO_EVENT')
             with self.assertRaises(ValueError):
                 service.detail(ready['receipt'], '../bad')

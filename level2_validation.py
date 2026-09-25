@@ -30,6 +30,26 @@ def _return(start, end):
     return 100 * (end / start - 1)
 
 
+def close_path_drawdown(path):
+    """Observed adjusted-close path only; missing sessions invalidate the path."""
+    if not path:
+        return None, None, None
+    peak = None
+    peak_day = None
+    worst = 0.0
+    worst_peak = None
+    worst_trough = None
+    for day, value in path:
+        if not _price(value):
+            return None, None, None
+        if peak is None or value > peak:
+            peak, peak_day = value, day
+        drawdown = 100 * (value / peak - 1)
+        if drawdown < worst:
+            worst, worst_peak, worst_trough = drawdown, peak_day, day
+    return worst, worst_peak, worst_trough
+
+
 def entry_gate(bar):
     """Necessary next-session bar checks; never a fill or execution decision."""
     if bar is None:
@@ -84,7 +104,8 @@ def study(flows, prices, days, start, end, asof, split, horizons=(1, 3, 5),
     aggregates = defaultdict(lambda: {'events': 0, 'observed': 0, 'pending': 0, 'missingPrice': 0,
                                       'returns': [], 'positive': 0, 'benchmarkSum': 0,
                                       'excessSum': 0, 'excessN': 0, 'daily': defaultdict(lambda: [0, 0]),
-                                      'signalDays': set(), 'entryGates': defaultdict(int)})
+                                      'signalDays': set(), 'entryGates': defaultdict(int),
+                                      'closeDrawdowns': []})
     observation_count = 0
     signal_days = days[index[start]:index[end] + 1]
     for day in signal_days:
@@ -113,11 +134,19 @@ def study(flows, prices, days, start, end, asof, split, horizons=(1, 3, 5),
             for code, rule in events:
                 outcome = _return(current_prices.get(code), target_prices.get(code)) if maturity else None
                 status = 'PENDING' if not maturity else 'MISSING_PRICE' if outcome is None else 'OBSERVED'
+                path = [(path_day, prices.get(path_day, {}).get(code))
+                        for path_day in days[i:i + horizon + 1]] if maturity else []
+                close_drawdown, drawdown_peak, drawdown_trough = close_path_drawdown(path)
+                drawdown_status = ('PENDING' if not maturity else
+                                   'OBSERVED' if close_drawdown is not None else 'MISSING_PRICE')
                 gate = (entry_gate(bars.get(entry_day, {}).get(code))
                         if entry_day is not None and i + 1 <= asof_idx else 'PENDING')
                 item = {'day': day, 'code': code, 'rule': rule, 'cohort': cohort,
                         'horizon': horizon, 'targetDay': target, 'status': status,
                         'entryDay': entry_day, 'entryGate': gate,
+                        'closeDrawdownStatus': drawdown_status,
+                        'maxCloseDrawdownPct': close_drawdown,
+                        'drawdownPeakDay': drawdown_peak, 'drawdownTroughDay': drawdown_trough,
                         'previousRatio': previous[code]['ratio'], 'currentRatio': current[code]['ratio'],
                         'deltaPP': current[code]['ratio'] - previous[code]['ratio'],
                         'triggerClose': current_prices.get(code) if _price(current_prices.get(code)) else None,
@@ -133,6 +162,8 @@ def study(flows, prices, days, start, end, asof, split, horizons=(1, 3, 5),
                 group = aggregates[(cohort, rule, horizon)]
                 group['events'] += 1
                 group['entryGates'][gate] += 1
+                if close_drawdown is not None:
+                    group['closeDrawdowns'].append(close_drawdown)
                 if status == 'PENDING':
                     group['pending'] += 1
                 elif status == 'MISSING_PRICE':
@@ -158,6 +189,9 @@ def study(flows, prices, days, start, end, asof, split, horizons=(1, 3, 5),
                         'pending': group['pending'], 'missingPrice': group['missingPrice'],
                         'signalDays': len(group['signalDays']),
                         'entryGateCounts': dict(sorted(group['entryGates'].items())),
+                        'closeDrawdownObserved': len(group['closeDrawdowns']),
+                        'medianMaxCloseDrawdownPct': (statistics.median(group['closeDrawdowns'])
+                                                      if group['closeDrawdowns'] else None),
                         'benchmarkPoolMeanN': group['benchmarkSum'] / n if n else None,
                         'meanReturnPct': statistics.mean(values) if values else None,
                         'medianReturnPct': statistics.median(values) if values else None,
@@ -172,6 +206,7 @@ def study(flows, prices, days, start, end, asof, split, horizons=(1, 3, 5),
             'limitations': ['事件仅在收盘日级数据就绪后可识别，收盘至收盘收益不是可成交策略收益',
                             'close×adj_factor 的历史当时可得性未验证；复权因子修订可改变回看结果',
                             '次日开盘日线门槛只检查价格、量和单一价位；即使通过也不证明可成交',
+                            '最大收盘回撤要求触发日至目标日的每个复权收盘均有效；盘中极值和可成交路径未观察',
                             '无实际订单回报、涨跌停排队、停牌退出、手续费、滑点或容量模型；不展示执行收益',
                             '基准为同日有效方向且有价格的股票等权均值，不是行业或风格匹配对照',
                             '重叠事件和同日股票相关；按信号日等权的超额均值仅供描述，不作显著性证明']}
@@ -296,11 +331,14 @@ class ValidationService:
                         connection.execute('''CREATE TABLE observation (
                             code TEXT, day TEXT, rule TEXT, cohort TEXT, horizon INTEGER, targetDay TEXT,
                             entryDay TEXT, entryGate TEXT,
+                            closeDrawdownStatus TEXT, maxCloseDrawdownPct REAL,
+                            drawdownPeakDay TEXT, drawdownTroughDay TEXT,
                             status TEXT, previousRatio REAL, currentRatio REAL, deltaPP REAL,
                             triggerClose REAL, targetClose REAL, returnPct REAL, benchmarkPct REAL,
                             excessPct REAL, benchmarkN INTEGER)''')
                         columns = ('code', 'day', 'rule', 'cohort', 'horizon', 'targetDay',
-                                   'entryDay', 'entryGate', 'status',
+                                   'entryDay', 'entryGate', 'closeDrawdownStatus',
+                                   'maxCloseDrawdownPct', 'drawdownPeakDay', 'drawdownTroughDay', 'status',
                                    'previousRatio', 'currentRatio', 'deltaPP', 'triggerClose', 'targetClose',
                                    'returnPct', 'benchmarkPct', 'excessPct', 'benchmarkN')
                         buffer = []
