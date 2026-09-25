@@ -12,19 +12,74 @@ def usable(row):
             finite(row.get('net')) and not (finite(row.get('unknown')) and row['unknown']>0))
 
 
+def slope(values):
+    if len(values)<2 or not all(finite(value) for value in values):
+        return None
+    midpoint=(len(values)-1)/2
+    return sum((index-midpoint)*value for index,value in enumerate(values))/sum((index-midpoint)**2 for index in range(len(values)))
+
+
+def persistence(values, boundary=0):
+    if not values or not finite(values[-1]):
+        return {'side':None,'days':None,'leftCensored':False}
+    side=(values[-1]>boundary)-(values[-1]<boundary)
+    days=0
+    for value in reversed(values):
+        if not finite(value) or (value>boundary)-(value<boundary)!=side:
+            break
+        days+=1
+    return {'side':side,'days':days,'leftCensored':days==len(values)}
+
+
+def improvement(values):
+    if len(values)<2 or not all(finite(value) for value in values):
+        return {'comparisons':None,'leftCensored':False}
+    comparisons=0
+    for previous,current in reversed(list(zip(values[:-1],values[1:]))):
+        if current<=previous:
+            break
+        comparisons+=1
+    return {'comparisons':comparisons,'leftCensored':comparisons==len(values)-1}
+
+
+def market_state(trajectory,window,common):
+    status='INCOMPLETE_WINDOW' if len(trajectory)!=window else 'NO_COMMON_COHORT' if not common else 'AVAILABLE'
+    if status!='AVAILABLE':
+        return {'status':status,'latestRatio':None,'latestBuyShare':None,'ratioDeltaPP':None,'buyShareDeltaPP':None,
+                'ratioSlopePPPerDay':None,'buyShareSlopePPPerDay':None,'ratioPersistence':persistence([]),
+                'breadthPersistence':persistence([]),'ratioImprovement':improvement([])}
+    ratios=[row['ratio'] for row in trajectory]
+    shares=[row['buyShare'] for row in trajectory]
+    return {'status':status,'latestRatio':ratios[-1],'latestBuyShare':shares[-1],
+            'ratioDeltaPP':ratios[-1]-ratios[-2] if len(ratios)>1 else None,
+            'buyShareDeltaPP':shares[-1]-shares[-2] if len(shares)>1 else None,
+            'ratioSlopePPPerDay':slope(ratios),'buyShareSlopePPPerDay':slope(shares),
+            'ratioPersistence':persistence(ratios),'breadthPersistence':persistence(shares,50),
+            'ratioImprovement':improvement(ratios)}
+
+
 def derive(result):
     entries=list(result.get('states',{}).items())
     dates=sorted({row['day'] for _,state in entries for row in state.get('history',[])})
     rows=[(code,state,{row['day']:row for row in state.get('history',[])}) for code,state in entries]
     common=[item for item in rows if len(dates)==result['window'] and all(usable(item[2].get(day)) for day in dates)]
+    sources={source['day']:source for source in result.get('sources',[]) if isinstance(source,dict) and 'day' in source}
     trajectory=[]
     for day in dates:
         amounts=[row[day]['amount'] for _,_,row in rows if isinstance(row.get(day),dict) and finite(row[day].get('amount')) and row[day]['amount']>0]
         flow=[row[day] for _,_,row in common]
         denominator=sum(row['amount'] for row in flow)
+        numerator=sum(row['net'] for row in flow)
         trajectory.append({'day':day,'amount':sum(amounts) if amounts else None,'amountCoverage':len(amounts),
-                           'ratio':100*sum(row['net'] for row in flow)/denominator if denominator else None,
-                           'buyShare':100*sum(row['ratio']>0 for row in flow)/len(flow) if flow else None})
+                           'directionCoverage':sum(usable(row.get(day)) for _,_,row in rows),
+                           'commonAmount':denominator if flow else None,'commonNet':numerator if flow else None,
+                           'ratio':100*numerator/denominator if denominator else None,
+                           'buyShare':100*sum(row['ratio']>0 for row in flow)/len(flow) if flow else None,
+                           'sourceStatus':sources.get(day,{}).get('status'),'sourceFile':sources.get(day,{}).get('source')})
+    for index,row in enumerate(trajectory):
+        previous=trajectory[index-1] if index else None
+        row['ratioDeltaPP']=row['ratio']-previous['ratio'] if previous and finite(row['ratio']) and finite(previous['ratio']) else None
+        row['buyShareDeltaPP']=row['buyShare']-previous['buyShare'] if previous and finite(row['buyShare']) and finite(previous['buyShare']) else None
     counts={'improve':0,'worsen':0,'flat':0,'unknown':0,'toBuy':0,'toSell':0}
     applicable=len(dates)>=2 and result['window']>1
     stocks=[]
@@ -40,6 +95,7 @@ def derive(result):
                 if previous['ratio']>0>latest['ratio']:counts['toSell']+=1
         stocks.append({'code':code,**state,'viewDelta':delta,'change':change})
     stocks.sort(key=lambda row:row['code'])
-    return {'method':'continuous-common-cohort-20260923','eventMethod':result.get('eventMethod'),'day':result.get('day'),'window':result['window'],
+    return {'method':'common-cohort-weighted-flow-and-breadth','eventMethod':result.get('eventMethod'),'day':result.get('day'),'window':result['window'],
             'dates':dates,'total':len(rows),'common':len(common),'trajectory':trajectory,
+            'marketState':market_state(trajectory,result['window'],len(common)),
             'applicable':applicable,'counts':counts,'stocks':stocks}
