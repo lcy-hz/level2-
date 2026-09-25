@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { filterCandidates, priceDirection, stateNarrative } from '../candidateFilters.js'
 import KlineTrigger from './KlineTrigger.vue'
 import DetailEvidence from './DetailEvidence.vue'
@@ -17,6 +17,7 @@ const stateChange = ref(props.initialFilters.stateChange || 'all')
 const stateContinuity = ref(props.initialFilters.stateContinuity || 'all')
 const page = ref(1)
 const selected = ref(null)
+const detailDialog = ref(null)
 const labels = computed(() => [...new Set(props.cards.map(card => card.label))].sort())
 const linkedView = computed(() => props.stateView?.day === props.day ? props.stateView : null)
 const states = computed(() => new Map((linkedView.value?.stocks || []).map(stock => [stock.code, stock])))
@@ -41,6 +42,21 @@ function openFromCard(event, card) {
   if (event.target instanceof Element && event.target.closest('button, a, input, select, textarea')) return
   selected.value = card
 }
+function closeDetail() {
+  detailDialog.value?.close()
+  selected.value = null
+}
+function closeOnBackdrop(event) {
+  const dialog = detailDialog.value
+  if (!dialog || event.target !== dialog) return
+  const bounds = dialog.getBoundingClientRect()
+  if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) closeDetail()
+}
+watch(selected, async card => {
+  if (!card) return
+  await nextTick()
+  if (selected.value === card && detailDialog.value && !detailDialog.value.open) detailDialog.value.showModal()
+})
 const finite = value => typeof value === 'number' && Number.isFinite(value)
 const money = value => !finite(value) ? '未知' : Math.abs(value) >= 1e8 ? `${(value / 1e8).toFixed(2)} 亿` : `${(value / 1e4).toFixed(1)} 万`
 const percent = value => !finite(value) ? '未知' : `${value > 0 ? '+' : ''}${value !== 0 && Math.abs(value) < .005 ? value.toExponential(2) : value.toFixed(2)}%`
@@ -84,16 +100,19 @@ watch(pages, count => { if (page.value > count) page.value = count })
       </article>
     </div>
     <div class="pagination"><button :disabled="page <= 1" @click="page--">上一页</button><span>{{ page }} / {{ pages }}</span><button :disabled="page >= pages" @click="page++">下一页</button></div>
-    <div v-if="selected" class="dialog-backdrop" @click.self="selected = null">
-      <section class="dialog" role="dialog" aria-modal="true" :aria-label="selected.name + '证据详情'">
-        <button class="close" @click="selected = null">关闭</button><span class="eyebrow">DAILY EVIDENCE</span><h2>{{ selected.name }} <KlineTrigger :code="selected.code" :name="selected.name" :day="day" :frozen="frozen" :snapshot-charts="snapshotCharts" @loaded="emit('chart-loaded', $event)" /></h2>
+    <dialog v-if="selected" ref="detailDialog" class="dialog" :aria-label="selected.name + '证据详情'" @close="selected = null" @click="closeOnBackdrop">
+        <button class="close" @click="closeDetail">关闭</button><span class="eyebrow">DAILY EVIDENCE</span><h2>{{ selected.name }} <KlineTrigger :code="selected.code" :name="selected.name" :day="day" :frozen="frozen" :snapshot-charts="snapshotCharts" @loaded="emit('chart-loaded', $event)" /></h2>
         <p>{{ selected.label }} · 涨跌 {{ percent(selected.ret) }} · 主动净额 {{ money(selected.net) }} · 净额比 {{ percent(selected.ratio) }}</p>
         <p>方向状态：{{ selected.directionStatus ?? '未知' }}；未知方向金额：{{ money(selected.unknownAmount) }}；关联单身份：{{ selected.parentIdentityStatus ?? '未验证' }}。</p>
         <section v-if="linkedView" class="candidate-state-evidence" aria-label="连续状态证据"><p class="footnote">已应用 {{ linkedView.window }} 交易日（{{ linkedView.dates[0] }}—{{ linkedView.dates.at(-1) }}）{{ linkedView.applicable ? '' : '；较前日比较使用窗口外上一交易日有效数据，结构变化统计仍不适用' }}。</p><p>{{ stateNarrative(selected, selectedState, linkedView.applicable) }}</p><div class="table-scroll"><table class="candidate-state-table"><thead><tr><th>指标</th><th>当前水平</th><th>较前日变化</th><th>窗口趋势</th><th>持续性</th><th>质量</th></tr></thead><tbody><tr><th>主动净额比</th><td data-label="当前水平">{{ percent(selectedState?.level) }}</td><td data-label="较前日变化">{{ pp(delta(selectedState)) }}</td><td data-label="窗口趋势">加权 {{ percent(selectedState?.weighted) }} · 斜率 {{ linkedView.applicable ? pp(selectedState?.slope) + '/日' : '不适用' }}</td><td data-label="持续性">同向 {{ streak(selectedState) }} · 改善 {{ improvement(selectedState) }}</td><td data-label="质量">方向 {{ coverage(selectedState) }}</td></tr><tr><th>成交额</th><td data-label="当前水平">{{ money(selectedState?.amount) }}</td><td data-label="较前日变化">{{ percent(selectedState?.amountChange) }}</td><td data-label="窗口趋势">均值 {{ money(selectedState?.meanAmount) }}</td><td data-label="持续性">未定义</td><td data-label="质量">成交额 {{ selectedState ? `${selectedState.amountValid}/${selectedState.expected} 日` : '未计算' }}</td></tr><tr><th>价格</th><td data-label="当前水平">报告收盘 {{ selected.close ?? '未知' }}</td><td data-label="较前日变化">{{ percent(selected.ret) }}</td><td data-label="窗口趋势">区间 {{ percent(selectedState?.priceReturn) }}</td><td data-label="持续性">未定义</td><td data-label="质量">{{ selectedState?.priceReturn == null ? '复权价格覆盖不足' : '复权价格比值可用' }}</td></tr></tbody></table></div><details><summary>连续窗口逐日证据与反证</summary><p v-for="row in selectedState?.history || []" :key="row.day">{{ row.day }} · 成交额 {{ money(row.amount) }} · 净额比 {{ percent(row.ratio) }} · {{ row.reason || '方向记录可用' }}</p><p>当前连续指标仅为日级描述；十档末档与关联单身份不能单独证明盘中补单或被动吸筹。</p></details></section>
         <DetailEvidence :key="selected.code" :card="selected" :day="day" :frozen="frozen" @loaded="emit('detail-loaded', $event)" />
         <details><summary>逐日历史证据</summary><pre>{{ JSON.stringify(selected.history ?? [], null, 2) }}</pre></details>
         <p class="footnote">K 线悬浮每次读取本地最新文件；快照只展示保存时已加载的图表和深查。研究证据不构成交易确认。</p>
-      </section>
-    </div>
+    </dialog>
   </section>
 </template>
+
+<style scoped>
+.dialog { width: min(760px, calc(100% - 32px)); margin: auto; color: #e7f0fa; }
+.dialog::backdrop { background: #000b; }
+</style>
