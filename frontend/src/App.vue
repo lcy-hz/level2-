@@ -246,6 +246,7 @@ onBeforeUnmount(() => { buildRequest++; clearTimeout(buildTimer) })
     </div>
     <template v-if="document">
       <p class="scope">证据日期 {{ document.day }} · {{ document.mode === 'snapshot' ? '保存时冻结结果' : '来源校验后的本地结果' }} · 非吸筹或交易确认</p>
+      <aside class="method-alert" aria-label="关键计算口径"><strong>口径提醒</strong><span>报告收盘价取数值时钟最后正价快照；同刻重复仍需质量核验，闭市值不解释为可交易时点。十档买／卖是 14:57 前连续竞价末档逐列显示量合计，缺档可能低估，不代表全日承接。主动净额不是持仓变化；上涨伴净卖出不直接确认派发。</span></aside>
       <div class="metrics" v-if="current">
         <div class="metric"><span>覆盖 A 股</span><strong>{{ current.stocks?.toLocaleString() ?? '未知' }}</strong></div>
         <div class="metric"><span>成交额</span><strong>{{ money(current.amount) }}</strong></div>
@@ -256,7 +257,13 @@ onBeforeUnmount(() => { buildRequest++; clearTimeout(buildTimer) })
       <div id="review-panel" role="tabpanel" v-show="activeTab === 'review'"><QualitySummary :quality="document.report.quality" :gate="document.report.gate" /><MarketTimeline :markets="document.report.markets" /><ContinuousPanel :key="panelKey" :day="document.day" :cards="document.report.cards" :frozen="document.mode === 'snapshot'" :previous-day="previousDay" :next-day="nextDay" :snapshot-views="document.stateViews || {}" :snapshot-window="document.stateWindow" :snapshot-charts="document.charts || {}" :initial-ui="continuousUI" @navigate-day="moveTradingDay" @chart-loaded="captureChart" @state-loaded="captureState" @view-applied="captureAppliedState" @ui-change="captureContinuousUI" /><CandidatePanel :key="panelKey" :cards="document.report.cards" :day="document.day" :frozen="document.mode === 'snapshot'" :snapshot-charts="document.charts || {}" :initial-filters="filters" :state-view="activeStateView" @chart-loaded="captureChart" @detail-loaded="captureDetail" @filters-change="filters = $event" /></div>
       <div id="patterns-panel" role="tabpanel" v-show="activeTab === 'patterns'"><PatternPanel :key="panelKey" :day="document.day" :frozen="document.mode === 'snapshot'" :snapshot-patterns="document.patterns || null" :snapshot-charts="document.charts || {}" :initial-ui="document.patternUI || {}" :levels="stateLevels" :state-window="stateWindow" @chart-loaded="captureChart" @pattern-loaded="capturePattern" @detail-loaded="capturePatternDetail" @ui-change="capturePatternUI" /></div>
       <div id="validation-panel" role="tabpanel" v-show="activeTab === 'validation'"><ValidationPanel :key="panelKey" :day="document.day" :cards="document.report.cards" :frozen="document.mode === 'snapshot'" :saved="document.validation || null" :saved-details="document.validationDetails || {}" @loaded="captureValidation" @detail-loaded="captureValidationDetail" /></div>
-      <section class="panel migration-note"><h2>研究边界</h2><p>日级报告、连续观察、单股深查、22 类形态及事件后续收益均为研究证据。收盘后可识别事件的后续收盘收益，不等于可成交收益；盘口队列重建、参数外推及交易授权仍未实现。</p></section>
+      <section class="panel migration-note" aria-labelledby="boundary-title"><div class="section-heading"><div><span class="eyebrow">EVIDENCE BOUNDARY</span><h2 id="boundary-title">证据、反证与未知</h2></div></div><div class="quality-grid"><div class="subpanel"><strong>已展示的证据</strong><p>7 交易日日级轨迹、目标日质量报告与全库候选；已计算的连续窗口、单股盘中／盘口深查、图表、形态和后续观察按各自来源与覆盖展示。快照只读取保存时冻结的结果。</p></div><div class="subpanel"><strong>仍不能确认</strong><p>委托类型码、撤补单与成交队列身份、主动成交的因果价格冲击、可执行支撑及吸筹／派发意图。价格与资金背离是待核验现象，不是单独的买卖触发。</p></div></div><p>收盘后可识别事件的后续收盘收益，不等于可成交、成本后的策略收益；参数外推、排队成交和交易授权仍未验收。</p></section>
     </template>
   </main>
 </template>
+
+<style scoped>
+.method-alert { display: flex; gap: 10px; align-items: baseline; padding: 10px 13px; margin: 0 0 12px; border: 1px solid #67515d; border-left: 3px solid #db9ca8; border-radius: 9px; background: #241d29; color: #d8c9d2; font-size: 12px; line-height: 1.6; }
+.method-alert strong { flex: none; color: #ffd1d5; }
+@media (max-width: 620px) { .method-alert { display: block; } .method-alert strong { display: block; margin-bottom: 2px; } }
+</style>
