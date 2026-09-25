@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { dates, report, snapshot, snapshots } from './api.js'
+import { dates, report, saveSnapshot, snapshot, snapshots } from './api.js'
 import MarketTimeline from './components/MarketTimeline.vue'
 import QualitySummary from './components/QualitySummary.vue'
 import CandidatePanel from './components/CandidatePanel.vue'
@@ -14,6 +14,14 @@ const saved = ref([])
 const document = ref(null)
 const busy = ref(false)
 const error = ref('')
+const saving = ref(false)
+const saveMessage = ref('')
+const savedId = ref('')
+const chartReceipts = ref({})
+const stateReceipts = ref({})
+const loadedDetails = ref({})
+const stateWindow = ref(null)
+const filters = ref({ search: '', filter: 'all', direction: 'all', sort: 'default' })
 let request = 0
 
 const current = computed(() => document.value?.report?.markets?.at(-1) || null)
@@ -31,6 +39,13 @@ async function load() {
     if (id !== request) return
     document.value = result
     selectedDay.value = result.day
+    chartReceipts.value = {}
+    stateReceipts.value = {}
+    loadedDetails.value = {}
+    stateWindow.value = null
+    filters.value = { search: '', filter: 'all', direction: 'all', sort: 'default', ...(result.filters || {}) }
+    saveMessage.value = ''
+    savedId.value = ''
   } catch (cause) {
     if (id === request) error.value = cause.message
   } finally {
@@ -48,6 +63,41 @@ function chooseSnapshot(event) {
   snapshotId.value = event.target.value
   if (!snapshotId.value) return chooseDay()
   history.replaceState(null, '', `/?snapshot=${encodeURIComponent(snapshotId.value)}`)
+  load()
+}
+
+function captureChart({ key, receipt }) { chartReceipts.value = { ...chartReceipts.value, [key]: receipt } }
+function captureState({ window, receipt }) {
+  stateReceipts.value = { ...stateReceipts.value, [String(window)]: receipt }
+  stateWindow.value = window
+}
+function captureDetail(result) { loadedDetails.value = { ...loadedDetails.value, [result.code]: result } }
+async function save() {
+  if (!document.value || document.value.mode === 'snapshot' || saving.value) return
+  saving.value = true
+  saveMessage.value = '正在冻结当前已读取的证据；未加载的图表、深查和窗口不会补算…'
+  try {
+    // The API payload is JSON; serializing removes Vue's reactive proxies before freezing it.
+    const data = JSON.parse(JSON.stringify(document.value.report))
+    for (const card of data.cards) {
+      const result = loadedDetails.value[card.code]
+      if (!result) continue
+      for (const key of ['segments', 'parents', 'orders', 'regularCoverage']) card[key] = result[key]
+      card.computedDetail = true
+      card.detailEvidence = result
+    }
+    const savedSnapshot = await saveSnapshot({ day: document.value.day, data, charts: chartReceipts.value,
+      states: stateReceipts.value, stateWindow: stateWindow.value, filters: filters.value })
+    savedId.value = savedSnapshot.id
+    saveMessage.value = `已保存 ${savedSnapshot.day} 快照：${savedSnapshot.chartCount} 个图表、${Object.keys(loadedDetails.value).length} 只已加载深查、${Object.keys(stateReceipts.value).length} 个连续窗口。`
+    try { saved.value = await snapshots() } catch { /* 快照已提交，列表刷新失败不撤销成功状态 */ }
+  } catch (cause) { saveMessage.value = `保存失败：${cause.message}` }
+  finally { saving.value = false }
+}
+function openSaved() {
+  if (!savedId.value) return
+  snapshotId.value = savedId.value
+  history.replaceState(null, '', `/?snapshot=${encodeURIComponent(savedId.value)}`)
   load()
 }
 
@@ -70,7 +120,9 @@ onMounted(async () => {
       <label>报告日期<select v-model="selectedDay" :disabled="Boolean(snapshotId)" @change="chooseDay"><option v-if="snapshotId || !dateRows.length" :value="selectedDay">{{ selectedDay }}{{ snapshotId ? ' · 快照证据日' : '' }}</option><option v-if="!snapshotId" v-for="row in dateRows" :key="row.day" :value="row.day">{{ row.day }} · {{ row.status === 'ready' ? '可查看' : row.status === 'stale' ? '待更新' : '待计算' }}</option></select></label>
       <label>历史快照<select :value="snapshotId" @change="chooseSnapshot"><option value="">最新数据</option><option v-for="item in saved" :key="item.id" :value="item.id">{{ item.day }} · {{ new Date(item.savedAt).toLocaleString() }}</option></select></label>
       <a :href="legacyUrl" class="legacy-link">打开完整旧页面 ↗</a>
+      <button v-if="document?.mode === 'live'" class="save-button" :disabled="saving" @click="save">{{ saving ? '保存中…' : '保存当前证据快照' }}</button>
     </nav>
+    <p v-if="saveMessage" class="snapshot-message" role="status">{{ saveMessage }} <button v-if="savedId" @click="openSaved">查看快照</button></p>
 
     <div v-if="busy" class="notice" role="status">正在读取报告数据…</div>
     <div v-else-if="error" class="notice error" role="alert">
@@ -87,9 +139,9 @@ onMounted(async () => {
       </div>
       <QualitySummary :quality="document.report.quality" :gate="document.report.gate" />
       <MarketTimeline :markets="document.report.markets" />
-      <ContinuousPanel :key="document.mode + document.day" :day="document.day" :cards="document.report.cards" :frozen="document.mode === 'snapshot'" :snapshot-views="document.stateViews || {}" :snapshot-window="document.stateWindow" />
-      <CandidatePanel :cards="document.report.cards" />
-      <section class="panel migration-note"><h2>迁移范围</h2><p>当前 Vue 页面已接入报告、来源状态、质量证据、市场轨迹、连续观察、全库候选筛选和只读快照读取。形态扫描、悬浮 K 线、按需深查与快照保存暂保留在旧页面，迁移前不伪装成已实现。</p></section>
+      <ContinuousPanel :key="document.mode + document.day" :day="document.day" :cards="document.report.cards" :frozen="document.mode === 'snapshot'" :snapshot-views="document.stateViews || {}" :snapshot-window="document.stateWindow" :snapshot-charts="document.charts || {}" @chart-loaded="captureChart" @state-loaded="captureState" />
+      <CandidatePanel :key="document.mode + document.day" :cards="document.report.cards" :day="document.day" :frozen="document.mode === 'snapshot'" :snapshot-charts="document.charts || {}" :initial-filters="filters" @chart-loaded="captureChart" @detail-loaded="captureDetail" @filters-change="filters = $event" />
+      <section class="panel migration-note"><h2>迁移范围</h2><p>当前 Vue 页面已接入报告、来源状态、质量证据、市场轨迹、连续观察、全库候选筛选、日／分钟 K 线、按需单股深查及快照保存／读取。形态扫描仍在旧页面；Vue 快照仅冻结此页面已加载的证据，不补算未查看内容。</p></section>
     </template>
   </main>
 </template>

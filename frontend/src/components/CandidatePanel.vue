@@ -1,12 +1,17 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { filterCandidates } from '../candidateFilters.js'
+import KlineTrigger from './KlineTrigger.vue'
+import DetailEvidence from './DetailEvidence.vue'
 
-const props = defineProps({ cards: { type: Array, required: true } })
-const query = ref('')
-const label = ref('all')
-const order = ref('default')
-const direction = ref('all')
+const props = defineProps({ cards: { type: Array, required: true }, day: { type: String, required: true },
+  frozen: { type: Boolean, default: false }, snapshotCharts: { type: Object, default: () => ({}) },
+  initialFilters: { type: Object, default: () => ({}) } })
+const emit = defineEmits(['chart-loaded', 'detail-loaded', 'filters-change'])
+const query = ref(props.initialFilters.search || '')
+const label = ref(props.initialFilters.filter || 'all')
+const order = ref(props.initialFilters.sort || 'default')
+const direction = ref(props.initialFilters.direction || 'all')
 const page = ref(1)
 const selected = ref(null)
 const labels = computed(() => [...new Set(props.cards.map(card => card.label))].sort())
@@ -17,6 +22,7 @@ const resetPage = () => { page.value = 1 }
 const money = value => value == null ? '未知' : Math.abs(value) >= 1e8 ? `${(value / 1e8).toFixed(2)} 亿` : `${(value / 1e4).toFixed(1)} 万`
 const percent = value => value == null ? '未知' : `${value > 0 ? '+' : ''}${value.toFixed(2)}%`
 const tone = value => value == null ? '' : value > 0 ? 'positive' : value < 0 ? 'negative' : ''
+watch([query, label, direction, order], () => emit('filters-change', { search: query.value, filter: label.value, direction: direction.value, sort: order.value }))
 </script>
 
 <template>
@@ -30,22 +36,23 @@ const tone = value => value == null ? '' : value > 0 ? 'positive' : value < 0 ? 
     </div>
     <p class="footnote">筛选结果 {{ matches.length.toLocaleString() }} 只；分页仅改变展示，不改变数据和计算口径。</p>
     <div class="candidate-grid">
-      <button v-for="card in visible" :key="card.code" class="candidate-card" @click="selected = card">
-        <span class="badge">{{ card.label }}</span><strong>{{ card.name }} <small>{{ card.code }}</small></strong>
+      <article v-for="card in visible" :key="card.code" class="candidate-card">
+        <span class="badge">{{ card.label }}</span><strong>{{ card.name }} <KlineTrigger :code="card.code" :name="card.name" :day="day" :frozen="frozen" :snapshot-charts="snapshotCharts" @loaded="emit('chart-loaded', $event)" /></strong>
         <span>收盘 {{ card.close ?? '未知' }} · VWAP {{ card.vwap ?? '未知' }}</span>
         <span>涨跌 <b :class="tone(card.ret)">{{ percent(card.ret) }}</b> · 主动净额 <b :class="tone(card.net)">{{ money(card.net) }}</b></span>
         <span class="muted">十档 买 {{ card.bid?.toLocaleString() ?? '未知' }} / 卖 {{ card.ask?.toLocaleString() ?? '未知' }}</span>
-      </button>
+        <button type="button" class="card-detail" @click="selected = card">查看证据</button>
+      </article>
     </div>
     <div class="pagination"><button :disabled="page <= 1" @click="page--">上一页</button><span>{{ page }} / {{ pages }}</span><button :disabled="page >= pages" @click="page++">下一页</button></div>
     <div v-if="selected" class="dialog-backdrop" @click.self="selected = null">
       <section class="dialog" role="dialog" aria-modal="true" :aria-label="selected.name + '证据详情'">
-        <button class="close" @click="selected = null">关闭</button><span class="eyebrow">DAILY EVIDENCE · {{ selected.code }}</span><h2>{{ selected.name }}</h2>
+        <button class="close" @click="selected = null">关闭</button><span class="eyebrow">DAILY EVIDENCE</span><h2>{{ selected.name }} <KlineTrigger :code="selected.code" :name="selected.name" :day="day" :frozen="frozen" :snapshot-charts="snapshotCharts" @loaded="emit('chart-loaded', $event)" /></h2>
         <p>{{ selected.label }} · 涨跌 {{ percent(selected.ret) }} · 主动净额 {{ money(selected.net) }} · 净额比 {{ percent(selected.ratio) }}</p>
         <p>方向状态：{{ selected.directionStatus ?? '未知' }}；未知方向金额：{{ money(selected.unknownAmount) }}；关联单身份：{{ selected.parentIdentityStatus ?? '未验证' }}。</p>
-        <details><summary>盘中分段（原报告预计算）</summary><pre>{{ JSON.stringify(selected.segments ?? [], null, 2) }}</pre></details>
+        <DetailEvidence :key="selected.code" :card="selected" :day="day" :frozen="frozen" @loaded="emit('detail-loaded', $event)" />
         <details><summary>逐日历史证据</summary><pre>{{ JSON.stringify(selected.history ?? [], null, 2) }}</pre></details>
-        <p class="footnote">本页只展示报告已冻结的数据；K线悬浮和按需深查仍在旧页面，尚未迁移。</p>
+        <p class="footnote">K 线悬浮每次读取本地最新文件；快照只展示保存时已加载的图表和深查。研究证据不构成交易确认。</p>
       </section>
     </div>
   </section>

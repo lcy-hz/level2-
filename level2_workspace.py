@@ -235,11 +235,21 @@ class Workspace:
         if data.get('quality')!=service.report.get('quality'):raise ValueError('数据质量证据与服务端不一致')
         cards=data.get('cards',[])
         if len(cards)!=len(service.cards) or {c.get('code') for c in cards}!=set(service.cards):raise ValueError('报告股票覆盖不一致')
-        mutable={'segments','parents','orders','regularCoverage','computedDetail'}
+        mutable={'segments','parents','orders','regularCoverage','computedDetail','detailEvidence'}
         for card in cards:
             original=service.cards[card['code']]
             if {k:v for k,v in card.items() if k not in mutable}!={k:v for k,v in original.items() if k not in mutable}:
                 raise ValueError('报告基础字段与服务端不一致，请重新加载')
+            if card.get('computedDetail'):
+                status=service.status(card['code'])
+                if status.get('status')!='done':raise ValueError('该股深查未通过当前来源身份核验')
+                detail=status['result']
+                if any(card.get(key)!=detail.get(key) for key in ['segments','parents','orders','regularCoverage']):
+                    raise ValueError('该股深查字段与服务端不一致')
+                if 'detailEvidence' in card and card['detailEvidence']!=detail:
+                    raise ValueError('该股完整深查证据与服务端不一致')
+            elif 'detailEvidence' in card:
+                raise ValueError('未标记深查完成却附带深查证据')
         # Freeze the actual viewed report, including loaded detail tables. No background completion.
         if not isinstance(filters,dict) or any(not isinstance(v,str) or len(v)>200 for v in filters.values()):raise ValueError('筛选条件无效')
         charts={};receipts={}
@@ -316,4 +326,5 @@ class Workspace:
                 'integrity':{'report':'verified-against-frozen-html','metadata':'legacy-bundle-unverified'},
                 'stateViews':frozen_context.get('stateViews',{}),
                 'stateWindow':frozen_context.get('stateWindow'),
+                'charts':frozen_context.get('charts',{}),
                 'filters':frozen_context.get('filters',{}),'scope':bundle['scope']}

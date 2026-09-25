@@ -1,12 +1,15 @@
 <script setup>
 import { computed, onBeforeUnmount, ref } from 'vue'
 import { startState, stateView } from '../api.js'
+import KlineTrigger from './KlineTrigger.vue'
 
 const props = defineProps({
   day: { type: String, required: true }, cards: { type: Array, required: true },
   frozen: { type: Boolean, default: false }, snapshotViews: { type: Object, default: () => ({}) },
   snapshotWindow: { type: Number, default: null },
+  snapshotCharts: { type: Object, default: () => ({}) },
 })
+const emit = defineEmits(['chart-loaded', 'state-loaded'])
 const windowDays = ref(props.snapshotWindow || 3)
 const document = ref(props.frozen ? props.snapshotViews[String(windowDays.value)] || null : null)
 const status = ref(props.frozen ? document.value ? '只读：展示保存时的连续状态' : '此快照未保存所选窗口的连续状态' : '选择交易日窗口后计算；不自动扫描原始 Level-2')
@@ -57,6 +60,7 @@ async function poll(id, days) {
     pending.value = false
     page.value = 1
     status.value = `已计算 ${days} 个交易日；共同方向样本 ${response.view.common}/${response.view.total} 只`
+    if (response.receipt) emit('state-loaded', { window: days, receipt: response.receipt })
   } else if (response.status === 'queued' || response.status === 'running') {
     status.value = `${response.message}；${view.value ? '仍展示上次结果' : '暂无结果'}`
     timer = setTimeout(() => poll(id, days).catch(error => {
@@ -83,7 +87,7 @@ onBeforeUnmount(() => { sequence++; clearTimeout(timer) })
       <p v-if="view.applicable" class="footnote">净卖出转净买入 {{ view.counts.toBuy }} 只；净买入转净卖出 {{ view.counts.toSell }} 只。价格方向与资金变化独立判断。</p>
       <div class="state-list-head"><h3>个股逐日证据</h3><div><input v-model="query" @input="page = 1" placeholder="搜索代码或名称" aria-label="连续状态股票搜索" /><select v-model="change" @change="page = 1" aria-label="资金变化筛选"><option value="all">全部变化</option><option v-for="key in ['improve','worsen','flat','unknown']" :key="key" :value="key">{{ label[key] }}</option></select></div></div>
       <p class="footnote">匹配 {{ filtered.length }} 只 · 每页 20 只 · 代码升序</p>
-      <div class="state-stocks"><article v-for="stock in shown" :key="stock.code" class="subpanel"><div class="state-stock-title"><strong>{{ names[stock.code] || '名称未知' }} <small>{{ stock.code }}</small></strong><span>{{ view.applicable ? label[stock.change] : '单日观察' }}</span></div><p>区间价格 {{ number(stock.priceReturn) }} · 当前净额比 <b :class="tone(stock.level)">{{ number(stock.level) }}</b></p><p>日变化 {{ view.applicable ? number(stock.viewDelta, ' pp') : '不适用' }} · 窗口加权 {{ number(stock.weighted) }}</p><small>方向有效 {{ stock.valid }}/{{ stock.expected }} 日 · 连续同向 {{ stock.streak ?? '未知' }} 日</small><details><summary>逐日证据</summary><p v-for="row in stock.history" :key="row.day">{{ row.day }} · 成交额 {{ money(row.amount) }} · 净额比 {{ number(row.ratio) }} · {{ row.reason || '方向记录可用' }}</p></details></article></div>
+      <div class="state-stocks"><article v-for="stock in shown" :key="stock.code" class="subpanel"><div class="state-stock-title"><strong>{{ names[stock.code] || '名称未知' }} <KlineTrigger :code="stock.code" :name="names[stock.code] || ''" :day="day" :frozen="frozen" :snapshot-charts="snapshotCharts" @loaded="emit('chart-loaded', $event)" /></strong><span>{{ view.applicable ? label[stock.change] : '单日观察' }}</span></div><p>区间价格 {{ number(stock.priceReturn) }} · 当前净额比 <b :class="tone(stock.level)">{{ number(stock.level) }}</b></p><p>日变化 {{ view.applicable ? number(stock.viewDelta, ' pp') : '不适用' }} · 窗口加权 {{ number(stock.weighted) }}</p><small>方向有效 {{ stock.valid }}/{{ stock.expected }} 日 · 连续同向 {{ stock.streak ?? '未知' }} 日</small><details><summary>逐日证据</summary><p v-for="row in stock.history" :key="row.day">{{ row.day }} · 成交额 {{ money(row.amount) }} · 净额比 {{ number(row.ratio) }} · {{ row.reason || '方向记录可用' }}</p></details></article></div>
       <div class="pagination"><button :disabled="page <= 1" @click="page--">上一页</button><span>{{ page }} / {{ pages }}</span><button :disabled="page >= pages" @click="page++">下一页</button></div>
     </template>
   </section>

@@ -53,6 +53,26 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(before,self.w.frozen_page(result['id']))
         self.assertIn(b'"mode":"snapshot"',before)
         self.assertEqual(result['chartCount'],1)
+        frozen=self.w.snapshot_document(result['id'])
+        self.assertEqual(frozen['charts']['day/000001.SZ']['bars'],[[1,2,3]])
+        self.assertEqual(frozen['charts'].get('minute/000001.SZ'),None)
+
+    def test_snapshot_freezes_only_verified_full_detail(self):
+        detail={'code':'000001.SZ','day':'20260907','tradeRows':42,'amount':1000,'net':30,
+                'segments':[{'s':'09:30–10:00','a':1000,'n':30,'v':12.0}],
+                'parents':[{'b':'<5万','n':30,'c':2}], 'orders':[{'t':'0','s':'B','r':1,'q':100}],
+                'regularCoverage':100,'note':'测试中的完整深查证据'}
+        self.service.status=lambda code:{'status':'done','result':detail}
+        data=copy.deepcopy(self.data)
+        data['cards'][0].update({key:detail[key] for key in ['segments','parents','orders','regularCoverage']})
+        data['cards'][0]['computedDetail']=True
+        data['cards'][0]['detailEvidence']=copy.deepcopy(detail)
+        saved=self.w.save({'day':'20260907','data':data})
+        frozen=self.w.snapshot_document(saved['id'])['report']['cards'][0]['detailEvidence']
+        self.assertEqual(frozen['tradeRows'],42)
+        forged=copy.deepcopy(data);forged['cards'][0]['detailEvidence']['tradeRows']=999
+        with self.assertRaisesRegex(ValueError,'完整深查证据'):
+            self.w.save({'day':'20260907','data':forged})
 
     def test_report_document_is_gated_and_snapshot_never_reads_live(self):
         with patch.object(self.w,'status',return_value={'status':'ready'}):
@@ -70,6 +90,7 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(frozen['report'],self.data)
         self.assertEqual(frozen['mode'],'snapshot')
         self.assertEqual(frozen['stateViews'],{})
+        self.assertEqual(frozen['charts'],{})
         bundle=self.w.snapshot_path(saved['id'])/'bundle.json'
         content=json.loads(bundle.read_text());content['report']['cards'][0]['close']=99
         content['payloadSha256']=__import__('level2_workspace').digest(content['report'])
