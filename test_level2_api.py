@@ -108,6 +108,9 @@ class ReportApiTests(unittest.TestCase):
         with urlopen(f'http://127.0.0.1:{self.port}/level2-market-scan_20260922.html?date=20260922') as response:
             self.assertEqual(response.url,f'http://127.0.0.1:{self.port}/?date=20260922')
             self.assertIn('<div id="app"></div>',response.read().decode())
+        with urlopen(f'http://127.0.0.1:{self.port}/level2-market-scan_20260922.html') as response:
+            self.assertEqual(response.url,f'http://127.0.0.1:{self.port}/?date=20260922')
+            self.assertIn('<div id="app"></div>',response.read().decode())
         snapshot_id='a'*32
         with urlopen(f'http://127.0.0.1:{self.port}/level2_state_ui.html?snapshot={snapshot_id}') as response:
             self.assertEqual(response.url,f'http://127.0.0.1:{self.port}/?snapshot={snapshot_id}')
