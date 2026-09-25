@@ -327,4 +327,6 @@ class Workspace:
                 'stateViews':frozen_context.get('stateViews',{}),
                 'stateWindow':frozen_context.get('stateWindow'),
                 'charts':frozen_context.get('charts',{}),
+                'patterns':frozen_context.get('patterns'),
+                'patternUI':frozen_context.get('patternUI',{}),
                 'filters':frozen_context.get('filters',{}),'scope':bundle['scope']}

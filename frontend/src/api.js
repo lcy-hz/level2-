@@ -23,3 +23,7 @@ export const chart = (kind, code, day, signal) => getJson(`/api/chart/${kind}/${
 export const detailStatus = (code, day) => getJson(`/api/detail/${encodeURIComponent(code)}?date=${encodeURIComponent(day)}`)
 export const startDetail = (code, day) => postJson(`/api/detail?date=${encodeURIComponent(day)}`, { code })
 export const saveSnapshot = request => postJson('/api/snapshots', request)
+export const patternMeta = () => getJson('/api/patterns/meta')
+export const patternStatus = day => getJson(`/api/patterns/status?date=${encodeURIComponent(day)}`)
+export const startPatterns = day => postJson('/api/patterns', { day })
+export const patternDetail = (day, code, receipt) => getJson(`/api/patterns/detail?date=${encodeURIComponent(day)}&code=${encodeURIComponent(code)}&receipt=${encodeURIComponent(receipt)}`)

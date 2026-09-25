@@ -9,7 +9,7 @@ const props = defineProps({
   snapshotWindow: { type: Number, default: null },
   snapshotCharts: { type: Object, default: () => ({}) },
 })
-const emit = defineEmits(['chart-loaded', 'state-loaded'])
+const emit = defineEmits(['chart-loaded', 'state-loaded', 'view-applied'])
 const windowDays = ref(props.snapshotWindow || 3)
 const document = ref(props.frozen ? props.snapshotViews[String(windowDays.value)] || null : null)
 const status = ref(props.frozen ? document.value ? '只读：展示保存时的连续状态' : '此快照未保存所选窗口的连续状态' : '选择交易日窗口后计算；不自动扫描原始 Level-2')
@@ -61,6 +61,7 @@ async function poll(id, days) {
     page.value = 1
     status.value = `已计算 ${days} 个交易日；共同方向样本 ${response.view.common}/${response.view.total} 只`
     if (response.receipt) emit('state-loaded', { window: days, receipt: response.receipt })
+    emit('view-applied', { window: days, view: response.view })
   } else if (response.status === 'queued' || response.status === 'running') {
     status.value = `${response.message}；${view.value ? '仍展示上次结果' : '暂无结果'}`
     timer = setTimeout(() => poll(id, days).catch(error => {

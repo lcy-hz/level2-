@@ -91,6 +91,8 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(frozen['mode'],'snapshot')
         self.assertEqual(frozen['stateViews'],{})
         self.assertEqual(frozen['charts'],{})
+        self.assertIsNone(frozen['patterns'])
+        self.assertEqual(frozen['patternUI'],{})
         bundle=self.w.snapshot_path(saved['id'])/'bundle.json'
         content=json.loads(bundle.read_text());content['report']['cards'][0]['close']=99
         content['payloadSha256']=__import__('level2_workspace').digest(content['report'])
@@ -108,6 +110,18 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(bundle['stateViews']['1']['trajectory'][0]['ratio'],10)
         self.assertIn(b'stateViews',self.w.frozen_page(result['id']))
         self.assertEqual(self.w.snapshot_document(result['id'])['stateViews']['1']['trajectory'][0]['ratio'],10)
+
+    def test_snapshot_exposes_only_saved_pattern_result_and_viewed_details(self):
+        pattern={'day':'20260907','identity':'fixture','catalog':[{'id':'breakout'}],
+                 'stocks':[{'code':'000001.SZ','events':[]}],'dates':['20260907']}
+        detail={'code':'000001.SZ','day':'20260907','dates':['20260907'],'bars':[[1,2,1,2,100,10]]}
+        self.w._patterns=SimpleNamespace(receipt=lambda token,day:{'result':pattern,'details':{'000001.SZ':detail}})
+        saved=self.w.save({'day':'20260907','data':self.data,'patternReceipt':'a'*32,
+                           'patternCharts':['000001.SZ'],'patternUI':{'tab':'patterns','search':'000001'}})
+        frozen=self.w.snapshot_document(saved['id'])
+        self.assertEqual(frozen['patterns']['result'],pattern)
+        self.assertEqual(frozen['patterns']['details']['000001.SZ'],detail)
+        self.assertEqual(frozen['patternUI']['tab'],'patterns')
 
     def test_invalid_data_and_identifiers(self):
         bad=copy.deepcopy(self.data);bad['cards'][0]['close']=99
