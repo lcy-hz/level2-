@@ -114,8 +114,11 @@ def derive(result):
                 if previous['ratio']>0>latest['ratio']:counts['toSell']+=1
         stocks.append({'code':code,**state,'viewDelta':delta,'change':change})
     stocks.sort(key=lambda row:row['code'])
+    minute_sources=result.get('minuteSources')
     return {'method':'common-cohort-weighted-flow-and-breadth','eventMethod':result.get('eventMethod'),
-            'benchmark':result.get('benchmark'),'peers':result.get('peers'),'day':result.get('day'),'window':result['window'],
+            'benchmark':result.get('benchmark'),'peers':result.get('peers'),
+            'minuteSources':minute_sources,'minuteObserved':sum(stock.get('observedMinuteCloseDrawdown',{}).get('status')=='OBSERVED' for stock in stocks) if minute_sources is not None else None,
+            'day':result.get('day'),'window':result['window'],
             'dates':dates,'total':len(rows),'common':len(common),'priceCommon':len(price_common),'trajectory':trajectory,
             'marketState':market_state(trajectory,result['window'],len(common)),
             'priceState':price_state(trajectory,result['window'],len(price_common)),

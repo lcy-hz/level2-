@@ -143,6 +143,20 @@ class StateTests(unittest.TestCase):
                 self.assertNotEqual(first,service.identity(DAYS[-1],3))
             service.pool.shutdown()
 
+    def test_minute_file_is_part_of_continuous_source_identity(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base=Path(temp);root=base/'level2';root.mkdir()
+            minute=base/'stock_minute';minute.mkdir()
+            source=minute/f'{DAYS[-1]}.parquet';source.write_bytes(b'first')
+            service=StateService(SimpleNamespace(base=base,root=root))
+            cfg={'trade_calendar':str(base/'calendar.csv'),'history_roots':[],
+                 'benchmark':None,'daily_basic_root':None}
+            with patch.object(service,'validate',return_value=DAYS),patch('level2_state.settings',return_value=cfg):
+                first=service.identity(DAYS[-1],3)
+                source.write_bytes(b'changed')
+                self.assertNotEqual(first,service.identity(DAYS[-1],3))
+            service.pool.shutdown()
+
     def test_snapshot_receipts_reject_changed_source_or_wrong_window(self):
         import json
         with tempfile.TemporaryDirectory() as temp:

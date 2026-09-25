@@ -68,6 +68,7 @@ const sortable = {
   liquidityPeer: stock => stock.liquidityFlowPercentile,
   price: stock => stock.priceReturn,
   drawdown: stock => stock.maxCloseDrawdown,
+  minuteDrawdown: stock => stock.observedMinuteCloseDrawdown?.status === 'OBSERVED' ? stock.observedMinuteCloseDrawdown.valuePct : null,
   relative: stock => stock.relativeReturn,
 }
 

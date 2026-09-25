@@ -12,6 +12,8 @@ import duckdb
 from level2_contract import calendar
 from level2_events import observe
 from level2_peers import market_caps, rank_peers
+from level2_minute_state import safe_read_day as minute_read_day, sources as minute_sources, combine as minute_combine
+from level2_paths import PATHS
 
 BASE=Path(__file__).resolve().parent
 CONFIG=BASE/'level2_research.json'
@@ -187,13 +189,18 @@ class StateService:
         from level2_paths import PATHS
         days=self.validate(day,window);dates=[d for d in days if d<=day][-window-1:]
         cfg=settings()
-        items=[stamp(cfg['trade_calendar']),stamp(CONFIG),stamp(Path(__file__)),stamp(BASE/'level2_contract.py'),stamp(BASE/'level2_events.py'),stamp(BASE/'level2_peers.py'),cfg]
+        items=[stamp(cfg['trade_calendar']),stamp(CONFIG),stamp(Path(__file__)),stamp(BASE/'level2_contract.py'),stamp(BASE/'level2_events.py'),stamp(BASE/'level2_peers.py'),stamp(BASE/'level2_minute_state.py'),stamp(BASE/'level2_intraday.py'),cfg]
         if cfg['benchmark']:items.append(stamp(cfg['benchmark']['path']))
         if cfg.get('daily_basic_root'):items.append(stamp(Path(cfg['daily_basic_root'])/f'{day}_daily_basic.csv'))
         for d in dates:
             p=self.source(d)
             items.extend([stamp(p) if p else [d,'missing'],stamp(PATHS['stk_factor_pro']/f'{d}_stk_factor_pro.csv')])
             if p:items.extend([stamp(p.parent/'_conversion_audit'/d/'manifest.json'),stamp(p.parent/'_conversion_audit'/d/'COMMITTED')])
+        from level2_intraday import minute_directory
+        for d in dates[-window:]:
+            items.extend([stamp(minute_directory(self.workspace.root)/f'{d}.parquet'),
+                          stamp(self.workspace.root/'_conversion_audit'/d/'manifest.json'),
+                          stamp(self.workspace.root/'_conversion_audit'/d/'COMMITTED')])
         return sha(items)
 
     def facts(self,day):
@@ -309,13 +316,34 @@ class StateService:
             benchmark=benchmark_evidence(settings()['benchmark'],dates,window)
             states={code:compute({d:rows[code] for d,rows in allrows.items() if code in rows},days,day,window,
                                  benchmark['returnPct']) for code in service.cards}
+            window_dates=dates[-window:]
+            minute_days={};minute_lineage=[]
+            if len(dates)==window+1:
+                for d in window_dates:
+                    with self.lock:self.jobs[key]={'status':'running','message':'连续状态：正在核验分钟收盘 '+d,'identity':identity}
+                    minute_days[d],source=minute_read_day(self.workspace.root,PATHS['stk_factor_pro'],d,
+                                                           set(service.cards),self.base/'.level2_minute_state_cache')
+                    minute_lineage.append(source)
+            else:
+                minute_lineage=[minute_sources(self.workspace.root,PATHS['stk_factor_pro'],d) for d in window_dates]
+            minute_status={source['day']:source['status'] for source in minute_lineage}
+            baseline_day=dates[0] if len(dates)==window+1 else None
+            for code,state in states.items():
+                if baseline_day is None:
+                    state['observedMinuteCloseDrawdown']={'status':'INCOMPLETE_WINDOW','valuePct':None,
+                        'peakTime':None,'troughTime':None,'presentMinutes':0,'tradedMinutes':0,
+                        'expectedMinutes':240*window,'missingDays':window_dates}
+                else:
+                    baseline=allrows[baseline_day].get(code,{}).get('adjusted')
+                    state['observedMinuteCloseDrawdown']=minute_combine(window_dates,baseline,
+                        {d:minute_days[d].get(code) for d in window_dates},minute_status)
             caps,cap_source=market_caps(settings()['daily_basic_root'],day)
             peers=rank_peers(states,caps,cap_source)
             if identity!=self.identity(day,window):raise ValueError('计算期间来源变化，结果未发布')
-            result={'day':day,'window':window,'states':states,'sources':sources,'benchmark':benchmark,'peers':peers,'identity':identity,
+            result={'day':day,'window':window,'states':states,'sources':sources,'minuteSources':minute_lineage,'benchmark':benchmark,'peers':peers,'identity':identity,
                     'eventMethod':'相邻交易日日级主动净额比严格变号或负值变化；状态仅随窗口内后续有效观测更新；未知不跨越',
                     'priceMethod':'本地 close×adj_factor 比值；N日收益使用窗口前一交易日为基点；历史当时可得性未验证',
-                    'scope':'日级价格／成交额／已识别主动方向。已校准旧来源0买1卖，逐条买卖编号复核；未校准来源及冲突记录未知。无自动吸筹、支撑或买卖触发。'}
+                    'scope':'日级价格／成交额／已识别主动方向，以及独立的快照生成分钟收盘观察。已校准旧来源0买1卖，逐条买卖编号复核；未校准来源及冲突记录未知。无自动吸筹、支撑或买卖触发。'}
             token=uuid.uuid4().hex;self.receipts.mkdir(exist_ok=True)
             receipt=self.receipts/f'{token}.json';receipt_tmp=receipt.with_suffix('.tmp')
             receipt_tmp.write_text(dump(result));receipt_tmp.replace(receipt)

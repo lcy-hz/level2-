@@ -75,6 +75,16 @@ test('close drawdown sorts zero as observed and missing values last', () => {
   assert.deepEqual(codes(filterContinuousStocks(rows, {}, { sort: 'drawdown', direction: 'desc' })), ['A', 'D', 'B', 'C'])
 })
 
+test('window minute drawdown sorts only observed values and keeps unavailable last', () => {
+  const observed = valuePct => ({ status: 'OBSERVED', valuePct })
+  const rows = [{ code: 'A', observedMinuteCloseDrawdown: observed(0) },
+    { code: 'B', observedMinuteCloseDrawdown: observed(-8) },
+    { code: 'C', observedMinuteCloseDrawdown: { status: 'INCOMPLETE_MINUTES', valuePct: null } },
+    { code: 'D' }]
+  assert.deepEqual(codes(filterContinuousStocks(rows, {}, { sort: 'minuteDrawdown', direction: 'asc' })), ['B', 'A', 'C', 'D'])
+  assert.deepEqual(codes(filterContinuousStocks(rows, {}, { sort: 'minuteDrawdown', direction: 'desc' })), ['A', 'B', 'C', 'D'])
+})
+
 test('relative benchmark sort retains legitimate zero and unknown last', () => {
   const rows = [{ code: 'A', relativeReturn: 0 }, { code: 'B', relativeReturn: -2 },
     { code: 'C', relativeReturn: null }, { code: 'D', relativeReturn: 3 }]

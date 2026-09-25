@@ -76,12 +76,13 @@ class StateViewTests(unittest.TestCase):
 
     def test_matches_legacy_presentation_model_on_contract_fixture(self):
         result={'day':'20260922','window':2,'eventMethod':'日级事件口径',
+                'minuteSources':[{'day':'20260921','status':'READY'},{'day':'20260922','status':'READY'}],
                 'benchmark':{'status':'AVAILABLE','code':'000300.SH','name':'沪深300价格指数',
                              'returnPct':2,'source':'/tmp/index.csv'},
                 'peers':{'status':'AVAILABLE','source':'/tmp/daily_basic.csv','sizeCoverage':2,'liquidityCoverage':3},
                 'sources':[{'day':'20260921','status':'LEGACY_CALIBRATED_ROW_GUARD','source':'/tmp/a.parquet','priceStatus':'FILE_PRESENT','priceSource':'/tmp/a.csv'},
                            {'day':'20260922','status':'NATIVE','source':'/tmp/b.parquet','priceStatus':'FILE_PRESENT','priceSource':'/tmp/b.csv'}], 'states':{
-            'A':{'history':[dict(row('20260921',100,-10),priceDailyReturn=2),dict(row('20260922',100,10),priceDailyReturn=-1)]},
+            'A':{'observedMinuteCloseDrawdown':{'status':'OBSERVED','valuePct':-3},'history':[dict(row('20260921',100,-10),priceDailyReturn=2),dict(row('20260922',100,10),priceDailyReturn=-1)]},
             'B':{'history':[dict(row('20260921',900,20),priceDailyReturn=-1),dict(row('20260922',900,10),priceDailyReturn=3)]},
             'C':{'history':[dict(row('20260921',50,None),priceDailyReturn=0),dict(row('20260922',50,5),priceDailyReturn=None)]}}}
         script="const m=require(process.argv[1]);let s='';process.stdin.on('data',x=>s+=x);process.stdin.on('end',()=>process.stdout.write(JSON.stringify(m.derive(JSON.parse(s)))));"
@@ -92,6 +93,9 @@ class StateViewTests(unittest.TestCase):
         self.assertEqual(new['eventMethod'],old['eventMethod'])
         self.assertEqual(new['benchmark'],old['benchmark'])
         self.assertEqual(new['peers'],old['peers'])
+        self.assertEqual(new['minuteSources'],old['minuteSources'])
+        self.assertEqual(new['minuteObserved'],old['minuteObserved'])
+        self.assertEqual(new['minuteObserved'],1)
         self.assertEqual(new['common'],old['common'])
         self.assertEqual(new['priceCommon'],old['priceCommon'])
         self.assertEqual(new['priceState'],old['priceState'])

@@ -151,7 +151,9 @@ class WorkspaceTests(unittest.TestCase):
                               'sizeCoverage':1,'liquidityCoverage':1,'stockCount':1},
                      'sources':[{'day':'20260907','status':'NATIVE','source':'/test/deal_20260907.parquet',
                                  'priceStatus':'FILE_PRESENT','priceSource':'/test/20260907_stk_factor_pro.csv'}],
+                     'minuteSources':[{'day':'20260907','status':'READY','minuteFile':'/test/20260907.parquet'}],
                      'states':{'000001.SZ':{'maxCloseDrawdown':-5,'drawdownPeakDay':'20260904','drawdownTroughDay':'20260907','relativeReturn':1,
+                                            'observedMinuteCloseDrawdown':{'status':'OBSERVED','valuePct':-7,'tradedMinutes':200,'expectedMinutes':240},
                                             'totalMv':1000,'sizeGroup':1,'sizeGroupCount':1,'sizePeerCount':1,
                                             'sizeFlowPercentile':None,'liquidityGroup':1,'liquidityGroupCount':1,
                                             'liquidityPeerCount':1,'liquidityFlowPercentile':None,
@@ -167,6 +169,9 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(bundle['stateViews']['1']['priceState']['latestUpShare'],100)
         self.assertEqual(bundle['stateViews']['1']['trajectory'][0]['priceSourceFile'],'/test/20260907_stk_factor_pro.csv')
         self.assertEqual(bundle['stateViews']['1']['stocks'][0]['maxCloseDrawdown'],-5)
+        self.assertEqual(bundle['stateViews']['1']['stocks'][0]['observedMinuteCloseDrawdown']['valuePct'],-7)
+        self.assertEqual(bundle['stateViews']['1']['minuteObserved'],1)
+        self.assertEqual(bundle['stateViews']['1']['minuteSources'][0]['status'],'READY')
         self.assertEqual(bundle['stateViews']['1']['stocks'][0]['relativeReturn'],1)
         self.assertEqual(bundle['stateViews']['1']['benchmark']['returnPct'],1)
         self.assertEqual(bundle['stateViews']['1']['peers']['sizeCoverage'],1)

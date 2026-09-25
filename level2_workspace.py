@@ -38,7 +38,7 @@ def validate_continuous_ui(value):
         'change':{'all','improve','worsen','flat','unknown'},
         'continuity':{'all','known','unknown'},
         'coverage':{'all','full','partial','unknown'},
-        'sort':{'code','level','delta','weighted','slope','streak','improve','amount','amountRelative','sizePeer','liquidityPeer','price','drawdown','relative'},
+        'sort':{'code','level','delta','weighted','slope','streak','improve','amount','amountRelative','sizePeer','liquidityPeer','price','drawdown','minuteDrawdown','relative'},
         'direction':{'asc','desc'},
     }
     if set(value)-{'search','change','continuity','coverage','sort','direction','advanced','page'}:
