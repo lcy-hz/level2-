@@ -16,6 +16,18 @@ CONFIG = Path(__file__).with_name('level2_limitup_sources.json')
 SOURCE_STATUSES = {'NATIVE', 'LEGACY_CALIBRATED_ROW_GUARD'}
 MARKET_DIRECTIONS = ('IMPROVING', 'WEAKENING')
 STOCK_DIRECTIONS = ('IMPROVING', 'WEAKENING')
+BOARDS = ('MAIN', 'GEM', 'STAR')
+
+
+def board_of(code):
+    """Exchange-code market segment, not a claim about daily price-limit rules."""
+    if re.fullmatch(PAT, code or '') is None:
+        raise ValueError(f'非沪深A股代码：{code}')
+    if code.startswith(('300', '301', '302')):
+        return 'GEM'
+    if code.startswith(('688', '689')):
+        return 'STAR'
+    return 'MAIN'
 
 
 def limit_root():
@@ -115,9 +127,10 @@ def limitup_study(flows, sources, limitups, prices, bars, days, start, end, asof
     if index[start] == 0:
         raise ValueError('涨停研究起点前缺前一交易日')
     groups = defaultdict(lambda: {'events': 0, 'observed': 0, 'pending': 0,
-                                  'missingPrice': 0, 'returns': [], 'excesses': [],
+                                  'missingPrice': 0, 'returns': [], 'excesses': [], 'boardExcesses': [],
                                   'daily': defaultdict(lambda: {'events': 0, 'observed': 0,
-                                                                'returns': [], 'excesses': []})})
+                                                                'returns': [], 'excesses': [], 'boardExcesses': []})})
+    board_returns = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
     coverage = []
     max_horizon = max(horizons)
     for day in days[index[start]:index[end] + 1]:
@@ -203,6 +216,13 @@ def limitup_study(flows, sources, limitups, prices, bars, days, start, end, asof
                                 for code in valid_u] if mature else []
             baseline_returns = [value for value in baseline_returns if value is not None]
             benchmark = statistics.mean(baseline_returns) if baseline_returns else None
+            board_baselines = {}
+            if mature:
+                for board in BOARDS:
+                    board_pool = [_return(prices[day][code], target_prices.get(code))
+                                  for code in valid_u if board_of(code) == board]
+                    board_pool = [value for value in board_pool if value is not None]
+                    board_baselines[board] = statistics.mean(board_pool) if board_pool else None
             for code, stock_direction in selected.items():
                 group = groups[(cohort, horizon, market_direction, stock_direction)]
                 daily = group['daily'][day]
@@ -222,6 +242,12 @@ def limitup_study(flows, sources, limitups, prices, bars, days, start, end, asof
                 if benchmark is not None:
                     group['excesses'].append(outcome - benchmark)
                     daily['excesses'].append(outcome - benchmark)
+                board = board_of(code)
+                board_returns[(cohort, horizon, market_direction)][day][board, stock_direction].append(outcome)
+                board_benchmark = board_baselines.get(board)
+                if board_benchmark is not None:
+                    group['boardExcesses'].append(outcome - board_benchmark)
+                    daily['boardExcesses'].append(outcome - board_benchmark)
     summary = []
     for cohort in ('TRAIN', 'EMBARGO', 'OUT_OF_SAMPLE'):
         for horizon in horizons:
@@ -230,10 +256,14 @@ def limitup_study(flows, sources, limitups, prices, bars, days, start, end, asof
                     group = groups[(cohort, horizon, market_direction, stock_direction)]
                     daily_rows = [{'day': day, 'events': row['events'], 'observed': row['observed'],
                                    'meanReturnPct': statistics.mean(row['returns']) if row['returns'] else None,
-                                   'meanExcessPct': statistics.mean(row['excesses']) if row['excesses'] else None}
+                                   'meanExcessPct': statistics.mean(row['excesses']) if row['excesses'] else None,
+                                   'meanBoardExcessPct': (statistics.mean(row['boardExcesses'])
+                                                          if row['boardExcesses'] else None)}
                                   for day, row in sorted(group['daily'].items())]
                     comparable = [row['meanExcessPct'] for row in daily_rows
                                   if row['meanExcessPct'] is not None]
+                    board_comparable = [row['meanBoardExcessPct'] for row in daily_rows
+                                        if row['meanBoardExcessPct'] is not None]
                     summary.append({'cohort': cohort, 'horizon': horizon,
                                     'marketDirection': market_direction,
                                     'stockDirection': stock_direction,
@@ -243,6 +273,9 @@ def limitup_study(flows, sources, limitups, prices, bars, days, start, end, asof
                                     'meanReturnPct': statistics.mean(group['returns']) if group['returns'] else None,
                                     'meanExcessPct': statistics.mean(group['excesses']) if group['excesses'] else None,
                                     'equalDayMeanExcessPct': statistics.mean(comparable) if comparable else None,
+                                    'equalDayMeanBoardExcessPct': (statistics.mean(board_comparable)
+                                                                   if board_comparable else None),
+                                    'boardBenchmarkDays': len(board_comparable),
                                     'leaveOneDayOutExcess': leave_one_day_out_excess(daily_rows),
                                     'daily': daily_rows})
     contrasts = []
@@ -270,13 +303,46 @@ def limitup_study(flows, sources, limitups, prices, bars, days, start, end, asof
                                   'leaveOneDayOutSpread': leave_one_day_out_excess(
                                       [{'meanExcessPct': row['spreadPct']} for row in paired]),
                                   'daily': paired})
+    board_contrasts = []
+    for cohort in ('TRAIN', 'EMBARGO', 'OUT_OF_SAMPLE'):
+        for horizon in horizons:
+            for market_direction in MARKET_DIRECTIONS:
+                daily_board = board_returns[(cohort, horizon, market_direction)]
+                board_pairs = []
+                for day, buckets in sorted(daily_board.items()):
+                    for board in BOARDS:
+                        improving = buckets.get((board, 'IMPROVING'), [])
+                        weakening = buckets.get((board, 'WEAKENING'), [])
+                        if improving and weakening:
+                            board_pairs.append({'day': day, 'board': board,
+                                                'improvingN': len(improving), 'weakeningN': len(weakening),
+                                                'spreadPct': statistics.mean(improving) - statistics.mean(weakening)})
+                for board in ('ALL', *BOARDS):
+                    selected_pairs = [row for row in board_pairs if board == 'ALL' or row['board'] == board]
+                    by_day = defaultdict(list)
+                    for pair in selected_pairs:
+                        by_day[pair['day']].append(pair['spreadPct'])
+                    daily = [{'day': day, 'pairedBoards': len(spreads), 'spreadPct': statistics.mean(spreads)}
+                             for day, spreads in sorted(by_day.items())]
+                    spread_values = [row['spreadPct'] for row in daily]
+                    board_contrasts.append({'cohort': cohort, 'horizon': horizon,
+                                            'marketDirection': market_direction, 'board': board,
+                                            'pairedBoardDays': len(selected_pairs), 'pairedDays': len(daily),
+                                            'improvingN': sum(row['improvingN'] for row in selected_pairs),
+                                            'weakeningN': sum(row['weakeningN'] for row in selected_pairs),
+                                            'equalDayMeanSpreadPct': (statistics.mean(spread_values)
+                                                                      if spread_values else None),
+                                            'leaveOneDayOutSpread': leave_one_day_out_excess(
+                                                [{'meanExcessPct': row['spreadPct']} for row in daily]),
+                                            'daily': daily})
     return {'method': 'PROVIDER_U_MARKET_STOCK_FLOW_2X2_DESCRIPTIVE',
             'start': start, 'end': end, 'asof': asof, 'split': split,
             'horizons': list(horizons), 'coverage': coverage, 'summary': summary,
-            'pairedContrasts': contrasts,
+            'pairedContrasts': contrasts, 'boardMatchedContrasts': board_contrasts,
             'definition': 'limit_list_d.limit=U 的非ST沪深A股；市场净额比在排除当日U股后的相邻日共同有效样本上计算',
             'limitations': ['只做正负变化四格，无参数搜索；平值和未知不硬分组',
                             '收盘后的 U、市场与个股方向仅在当日数据就绪后可见，后续收盘收益非买卖点或可成交收益',
                             '市场方向按日共享，市场改善／恶化组的跨日比较混有行情时期因素',
                             '同日U股均值只作同群价格基准；缺价格不补零，剔一范围不是显著性检验',
+                            '板块内对照只控制代码板块与事件日期，未控制行业、市值、容量、封单或可成交性',
                             '本地涨停列表与复权因子无历史采集时间冻结，严格 PIT 未验证']}

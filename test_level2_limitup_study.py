@@ -2,10 +2,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from level2_limitup_study import limitup_study, market_change, read_limitups
+from level2_limitup_study import board_of, limitup_study, market_change, read_limitups
 
 
 DAYS = ['20260914', '20260915', '20260916', '20260917']
+A, B, C, X, Y = '000001.SZ', '300001.SZ', '000002.SZ', '600001.SH', '688001.SH'
 
 
 def flow(ratio):
@@ -13,6 +14,12 @@ def flow(ratio):
 
 
 class LimitUpStudyTests(unittest.TestCase):
+    def test_code_segment_is_explicit(self):
+        self.assertEqual([board_of(code) for code in (A, B, X, Y)],
+                         ['MAIN', 'GEM', 'MAIN', 'STAR'])
+        with self.assertRaisesRegex(ValueError, '非沪深A股'):
+            board_of('920001.BJ')
+
     def test_provider_u_non_st_a_universe_and_data_faults(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -36,30 +43,30 @@ class LimitUpStudyTests(unittest.TestCase):
                 read_limitups(root, '20260916')
 
     def test_market_excludes_limit_up_stocks_and_uses_fixed_common_set(self):
-        previous = {'A': flow(-10), 'B': flow(10), 'X': flow(-20), 'Y': flow(-20),
+        previous = {A: flow(-10), B: flow(10), X: flow(-20), Y: flow(-20),
                     'ONLY_PREVIOUS': flow(100)}
-        current = {'A': flow(90), 'B': flow(90), 'X': flow(-10), 'Y': flow(-10),
+        current = {A: flow(90), B: flow(90), X: flow(-10), Y: flow(-10),
                    'ONLY_CURRENT': flow(100)}
-        market = market_change(previous, current, {'A', 'B'})
+        market = market_change(previous, current, {A, B})
         self.assertEqual((market['commonStocks'], market['previousRatio'],
                           market['currentRatio'], market['deltaPP']), (2, -20, -10, 10))
 
     def test_two_by_two_outcomes_use_same_day_u_baseline_without_price_filling(self):
         flows = {
-            '20260914': {'A': flow(-10), 'B': flow(10), 'X': flow(-20), 'Y': flow(-20)},
-            '20260915': {'A': flow(-10), 'B': flow(10), 'X': flow(-20), 'Y': flow(-20)},
-            '20260916': {'A': flow(-5), 'B': flow(5), 'X': flow(-10), 'Y': flow(-10)},
+            '20260914': {A: flow(-10), B: flow(10), X: flow(-20), Y: flow(-20)},
+            '20260915': {A: flow(-10), B: flow(10), X: flow(-20), Y: flow(-20)},
+            '20260916': {A: flow(-5), B: flow(5), X: flow(-10), Y: flow(-10)},
         }
         sources = {day: 'NATIVE' for day in DAYS[:3]}
         limitups = {
             '20260915': ({'day': '20260915', 'status': 'AVAILABLE', 'uRows': 0, 'eligibleRows': 0}, {}),
             '20260916': ({'day': '20260916', 'status': 'AVAILABLE', 'uRows': 2, 'eligibleRows': 2},
-                         {'A': 10.0, 'B': 10.0}),
+                         {A: 10.0, B: 10.0}),
         }
-        prices = {'20260916': {'A': 10.0, 'B': 10.0},
-                  '20260917': {'A': 11.0, 'B': 9.0}}
-        bars = {'20260916': {'A': (10, 10, 10, 10, 100),
-                             'B': (10, 10, 10, 10, 100)}}
+        prices = {'20260916': {A: 10.0, B: 10.0},
+                  '20260917': {A: 11.0, B: 9.0}}
+        bars = {'20260916': {A: (10, 10, 10, 10, 100),
+                             B: (10, 10, 10, 10, 100)}}
         result = limitup_study(flows, sources, limitups, prices, bars, DAYS,
                                '20260915', '20260916', '20260917', '20260915', (1,))
         observed = [row for row in result['summary'] if row['cohort'] == 'OUT_OF_SAMPLE'
@@ -80,8 +87,13 @@ class LimitUpStudyTests(unittest.TestCase):
         self.assertAlmostEqual(contrast['equalDayMeanSpreadPct'], 20)
         self.assertEqual(contrast['daily'][0]['improvingN'], 1)
         self.assertEqual(contrast['daily'][0]['weakeningN'], 1)
+        board_contrast = next(row for row in result['boardMatchedContrasts']
+                              if row['cohort'] == 'OUT_OF_SAMPLE' and row['horizon'] == 1
+                              and row['marketDirection'] == 'IMPROVING' and row['board'] == 'ALL')
+        self.assertEqual(board_contrast['pairedDays'], 0)
+        self.assertIsNone(board_contrast['equalDayMeanSpreadPct'])
         missing = limitup_study(flows, sources, limitups,
-                                {**prices, '20260917': {'A': 11.0}}, bars, DAYS,
+                                {**prices, '20260917': {A: 11.0}}, bars, DAYS,
                                 '20260915', '20260916', '20260917', '20260915', (1,))
         missing_row = next(row for row in missing['summary'] if row['cohort'] == 'OUT_OF_SAMPLE'
                            and row['stockDirection'] == 'WEAKENING' and row['marketDirection'] == 'IMPROVING')
@@ -97,32 +109,61 @@ class LimitUpStudyTests(unittest.TestCase):
         self.assertFalse(any(row['events'] for row in boundary['summary']))
 
     def test_missing_adjusted_factor_is_not_a_zero_return(self):
-        flows = {'20260914': {'A': flow(-10), 'X': flow(-20)},
-                 '20260915': {'A': flow(-10), 'X': flow(-20)},
-                 '20260916': {'A': flow(-5), 'X': flow(-10)}}
+        flows = {'20260914': {A: flow(-10), X: flow(-20)},
+                 '20260915': {A: flow(-10), X: flow(-20)},
+                 '20260916': {A: flow(-5), X: flow(-10)}}
         limitups = {'20260915': ({'day': '20260915', 'status': 'AVAILABLE', 'uRows': 0,
                                   'eligibleRows': 0}, {}),
                     '20260916': ({'day': '20260916', 'status': 'AVAILABLE', 'uRows': 1,
-                                  'eligibleRows': 1}, {'A': 10.0})}
+                                  'eligibleRows': 1}, {A: 10.0})}
         result = limitup_study(flows, {day: 'NATIVE' for day in DAYS[:3]}, limitups,
-                               {'20260916': {}, '20260917': {'A': 11}},
-                               {'20260916': {'A': (10, 10, 10, 10, 100)}}, DAYS,
+                               {'20260916': {}, '20260917': {A: 11}},
+                               {'20260916': {A: (10, 10, 10, 10, 100)}}, DAYS,
                                '20260915', '20260916', '20260917', '20260915', (1,))
         self.assertEqual(result['coverage'][1]['studyStatus'], 'NO_VALID_U_PRICE')
         self.assertEqual(result['coverage'][1]['missingAdjustedClose'], 1)
         self.assertFalse(any(row['events'] for row in result['summary']))
 
-    def test_valid_price_without_stock_direction_is_not_comparable(self):
-        flows = {'20260914': {'X': flow(-20)},
-                 '20260915': {'X': flow(-20)},
-                 '20260916': {'X': flow(-10)}}
+    def test_same_day_same_board_pair_removes_board_composition_effect(self):
+        flows = {'20260914': {A: flow(0), B: flow(0), C: flow(0), X: flow(-20)},
+                 '20260915': {A: flow(0), B: flow(0), C: flow(0), X: flow(-20)},
+                 '20260916': {A: flow(5), B: flow(5), C: flow(-5), X: flow(-10)}}
         limitups = {'20260915': ({'day': '20260915', 'status': 'AVAILABLE',
                                   'uRows': 0, 'eligibleRows': 0}, {}),
                     '20260916': ({'day': '20260916', 'status': 'AVAILABLE',
-                                  'uRows': 1, 'eligibleRows': 1}, {'A': 10.0})}
+                                  'uRows': 3, 'eligibleRows': 3}, {A: 10.0, B: 10.0, C: 10.0})}
+        prices = {'20260916': {A: 10, B: 10, C: 10},
+                  '20260917': {A: 11, B: 20, C: 9}}
+        bars = {'20260916': {code: (10, 10, 10, 10, 100) for code in (A, B, C)}}
         result = limitup_study(flows, {day: 'NATIVE' for day in DAYS[:3]}, limitups,
-                               {'20260916': {'A': 10}, '20260917': {'A': 11}},
-                               {'20260916': {'A': (10, 10, 10, 10, 100)}}, DAYS,
+                               prices, bars, DAYS, '20260915', '20260916',
+                               '20260917', '20260915', (1,))
+        raw = next(row for row in result['pairedContrasts']
+                   if row['cohort'] == 'OUT_OF_SAMPLE' and row['marketDirection'] == 'IMPROVING')
+        matched = next(row for row in result['boardMatchedContrasts']
+                       if row['cohort'] == 'OUT_OF_SAMPLE' and row['marketDirection'] == 'IMPROVING'
+                       and row['board'] == 'ALL')
+        self.assertAlmostEqual(raw['equalDayMeanSpreadPct'], 65)
+        self.assertAlmostEqual(matched['equalDayMeanSpreadPct'], 20)
+        self.assertEqual((matched['pairedBoardDays'], matched['pairedDays'],
+                          matched['improvingN'], matched['weakeningN']), (1, 1, 1, 1))
+        improving = next(row for row in result['summary']
+                         if row['cohort'] == 'OUT_OF_SAMPLE' and row['marketDirection'] == 'IMPROVING'
+                         and row['stockDirection'] == 'IMPROVING')
+        self.assertAlmostEqual(improving['equalDayMeanBoardExcessPct'], 5)
+        self.assertEqual(improving['boardBenchmarkDays'], 1)
+
+    def test_valid_price_without_stock_direction_is_not_comparable(self):
+        flows = {'20260914': {X: flow(-20)},
+                 '20260915': {X: flow(-20)},
+                 '20260916': {X: flow(-10)}}
+        limitups = {'20260915': ({'day': '20260915', 'status': 'AVAILABLE',
+                                  'uRows': 0, 'eligibleRows': 0}, {}),
+                    '20260916': ({'day': '20260916', 'status': 'AVAILABLE',
+                                  'uRows': 1, 'eligibleRows': 1}, {A: 10.0})}
+        result = limitup_study(flows, {day: 'NATIVE' for day in DAYS[:3]}, limitups,
+                               {'20260916': {A: 10}, '20260917': {A: 11}},
+                               {'20260916': {A: (10, 10, 10, 10, 100)}}, DAYS,
                                '20260915', '20260916', '20260917', '20260915', (1,))
         self.assertEqual(result['coverage'][1]['studyStatus'], 'NO_VALID_STOCK_DIRECTION')
         self.assertEqual(result['coverage'][1]['matchedClose'], 1)
