@@ -336,9 +336,22 @@ def limitup_study(flows, sources, limitups, prices, bars, days, start, end, asof
                         median_by_day[pair['day']].append(pair['medianStockSpreadPct'])
                         if pair['improvingN'] >= 3 and pair['weakeningN'] >= 3:
                             three_by_day[pair['day']].append(pair['spreadPct'])
-                    daily = [{'day': day, 'pairedBoards': len(spreads), 'spreadPct': statistics.mean(spreads)}
-                             for day, spreads in sorted(by_day.items())]
+                    daily = []
+                    for day, spreads in sorted(by_day.items()):
+                        components = [pair for pair in selected_pairs if pair['day'] == day]
+                        daily.append({'day': day, 'pairedBoards': len(spreads),
+                                      'improvingN': sum(pair['improvingN'] for pair in components),
+                                      'weakeningN': sum(pair['weakeningN'] for pair in components),
+                                      'spreadPct': statistics.mean(spreads),
+                                      'medianStockSpreadPct': statistics.mean(
+                                          pair['medianStockSpreadPct'] for pair in components),
+                                      'boardDetails': components if board == 'ALL' else []})
                     spread_values = [row['spreadPct'] for row in daily]
+                    for row in daily:
+                        other = [value['spreadPct'] for value in daily if value['day'] != row['day']]
+                        row['withoutDayMeanPct'] = statistics.mean(other) if other else None
+                        row['influencePP'] = (statistics.mean(spread_values) - row['withoutDayMeanPct']
+                                              if other else None)
                     median_stock_days = [statistics.mean(spreads) for _, spreads in sorted(median_by_day.items())]
                     three_days = [statistics.mean(spreads) for _, spreads in sorted(three_by_day.items()) if spreads]
                     board_contrasts.append({'cohort': cohort, 'horizon': horizon,

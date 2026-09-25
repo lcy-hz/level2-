@@ -147,6 +147,8 @@ class LimitUpStudyTests(unittest.TestCase):
         self.assertAlmostEqual(matched['equalDayMeanSpreadPct'], 20)
         self.assertEqual((matched['pairedBoardDays'], matched['pairedDays'],
                           matched['improvingN'], matched['weakeningN']), (1, 1, 1, 1))
+        self.assertIsNone(matched['daily'][0]['withoutDayMeanPct'])
+        self.assertIsNone(matched['daily'][0]['influencePP'])
         self.assertEqual(matched['minThreeEachSideDays'], 0)
         self.assertIsNone(matched['minThreeEachSideSpreadPct'])
         improving = next(row for row in result['summary']
@@ -206,6 +208,42 @@ class LimitUpStudyTests(unittest.TestCase):
         self.assertEqual(stronger['medianEventAmountYuan'], 100)
         self.assertEqual(stronger['entryGateCounts'],
                          {'NO_VOLUME': 1, 'ONE_PRICE_SESSION': 1, 'PRICE_REFERENCE_ONLY': 1})
+
+    def test_board_daily_evidence_identifies_influential_day(self):
+        codes = [A, C, '000003.SZ', '000004.SZ']
+        days = DAYS + ['20260918']
+        flows = {
+            '20260914': {**{code: flow(0) for code in codes}, X: flow(-20)},
+            '20260915': {**{code: flow(0) for code in codes}, X: flow(-20)},
+            '20260916': {**{code: flow(5 if index < 2 else -5)
+                           for index, code in enumerate(codes)}, X: flow(-10)},
+            '20260917': {**{code: flow(10 if index < 2 else -10)
+                           for index, code in enumerate(codes)}, X: flow(0)},
+        }
+        prices = {'20260916': dict.fromkeys(codes, 10),
+                  '20260917': dict(zip(codes, (12, 11, 11, 10))),
+                  '20260918': dict(zip(codes, (12.12, 11.11, 11, 10)))}
+        limitups = {'20260915': ({'day': '20260915', 'status': 'AVAILABLE',
+                                  'uRows': 0, 'eligibleRows': 0}, {}),
+                    **{day: ({'day': day, 'status': 'AVAILABLE', 'uRows': 4,
+                               'eligibleRows': 4}, prices[day]) for day in ('20260916', '20260917')}}
+        bars = {day: {code: (close, close, close, close, 100)
+                      for code, close in prices[day].items()}
+                for day in ('20260916', '20260917', '20260918')}
+        result = limitup_study(flows, {day: 'NATIVE' for day in days[:4]},
+                               limitups, prices, bars, days, '20260915',
+                               '20260917', '20260918', '20260915', (1,))
+        matched = next(row for row in result['boardMatchedContrasts']
+                       if row['cohort'] == 'OUT_OF_SAMPLE' and row['horizon'] == 1
+                       and row['marketDirection'] == 'IMPROVING' and row['board'] == 'ALL')
+        self.assertEqual(matched['pairedDays'], 2)
+        self.assertAlmostEqual(matched['equalDayMeanSpreadPct'], 5.5)
+        self.assertEqual([row['day'] for row in matched['daily']], ['20260916', '20260917'])
+        self.assertAlmostEqual(matched['daily'][0]['spreadPct'], 10)
+        self.assertAlmostEqual(matched['daily'][0]['withoutDayMeanPct'], 1)
+        self.assertAlmostEqual(matched['daily'][0]['influencePP'], 4.5)
+        self.assertAlmostEqual(matched['daily'][1]['influencePP'], -4.5)
+        self.assertEqual(matched['daily'][0]['boardDetails'][0]['board'], 'MAIN')
 
 
 if __name__ == '__main__':

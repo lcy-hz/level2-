@@ -49,6 +49,9 @@ const limitContrasts = computed(() => (limitStudy.value?.pairedContrasts || []).
   row.cohort === selectedCohort.value && row.horizon === selectedHorizon.value))
 const boardContrasts = computed(() => (limitStudy.value?.boardMatchedContrasts || []).filter(row =>
   row.cohort === selectedCohort.value && row.horizon === selectedHorizon.value))
+const dailyBoardRows = computed(() => boardContrasts.value.filter(row => row.board === 'ALL')
+  .flatMap(row => (row.daily || []).map(day => ({ ...day, marketDirection: row.marketDirection })))
+  .sort((a, b) => a.day.localeCompare(b.day) || a.marketDirection.localeCompare(b.marketDirection)))
 const limitCoverage = computed(() => {
   const days = limitStudy.value?.coverage || []
   return { requested: days.length, comparable: days.filter(row => row.studyStatus === 'COMPARABLE').length,
@@ -167,6 +170,7 @@ const limitStatusName = { COMPARABLE: '可比较', MISSING_LIMIT_LIST: '涨停�
   NO_VALID_U_PRICE: 'U股复权价格不可用', NO_VALID_STOCK_DIRECTION: 'U股资金方向不可用', NO_ELIGIBLE_U: '无合格U股' }
 const sensitivityRange = audit => !audit ? '旧结果未保存' : audit.comparableDays < 2
   ? `不足两日（${audit.comparableDays} 日）` : `${point(audit.minPct)} ～ ${point(audit.maxPct)}`
+const dayInfluence = value => value === undefined ? '旧结果未保存' : value === null ? '不足两日' : point(value)
 const resultLabel = row => row.status === 'PENDING' ? '未到期' : row.status === 'MISSING_PRICE' ? '价格缺失' : formatPct(row.returnPct)
 const entryGateName = { PENDING: '次日未到', MISSING_BAR: '缺日线', MISSING_PRICE: '价缺失', INVALID_OHLC: '价关系异常', UNKNOWN_VOLUME: '量未知', NO_VOLUME: '零成交量', ONE_PRICE_SESSION: '单一价位', PRICE_REFERENCE_ONLY: '仅价格参考' }
 const entryCounts = row => row.entryGateCounts == null ? '旧结果未保存' : Object.keys(row.entryGateCounts).length
@@ -221,6 +225,11 @@ onBeforeUnmount(() => { sequence++; detailSequence++; clearTimeout(timer) })
               <details class="validation-event validation-day-breakdown"><summary>极端收益敏感性 · 不改变原配对样本</summary>
                 <p class="footnote">“逐日中位”先按原法算每天的同板块收益差，再取日期中位数；“个股中位”先在每个板块×日分别取两组股票收益中位数，再按日等权。每侧至少 3 只仅作固定门槛对照，不替换主结果；样本太少时显示不可比。</p>
                 <div class="table-scroll"><table class="validation-table"><thead><tr><th>市场／板块</th><th>原均值差</th><th>逐日中位</th><th>个股中位差 · 按日等权</th><th>每侧≥3只 · 日期</th><th>每侧≥3只 · 均值差</th></tr></thead><tbody><tr v-for="row in boardContrasts" :key="row.marketDirection + row.board"><td>{{ directionName[row.marketDirection] }}／{{ boardName[row.board] }}</td><td>{{ point(row.equalDayMeanSpreadPct) }}</td><td>{{ point(row.medianDailySpreadPct) }}</td><td>{{ point(row.equalDayMedianStockSpreadPct) }}</td><td>{{ row.minThreeEachSideDays ?? '旧结果未知' }}</td><td>{{ point(row.minThreeEachSideSpreadPct) }}</td></tr></tbody></table></div>
+              </details>
+              <details class="validation-event validation-day-breakdown"><summary>逐日配对与单日影响 · {{ dailyBoardRows.length }} 个事件日</summary>
+                <p class="footnote">每行先在当日各有两组的板块内求差，再对当日板块等权。“剔除后均值”只移走这一交易日，能定位单日拉动，但不是置信区间。板块展开显示实际进入配对的样本；没有两组的板块不补零。</p>
+                <div class="table-scroll"><table class="validation-table"><thead><tr><th>事件日／市场</th><th>板块／改善／恶化</th><th>当日均值差</th><th>个股中位差</th><th>剔除后均值</th><th>该日影响</th></tr></thead><tbody><tr v-for="row in dailyBoardRows" :key="row.day + row.marketDirection"><th scope="row">{{ row.day }} · {{ directionName[row.marketDirection] }}</th><td><details v-if="row.boardDetails?.length"><summary>{{ row.pairedBoards }} 板块 · {{ row.improvingN }} / {{ row.weakeningN }}</summary><p v-for="board in row.boardDetails" :key="board.board" class="footnote">{{ boardName[board.board] }}：{{ board.improvingN }} / {{ board.weakeningN }} · 均值差 {{ point(board.spreadPct) }} · 个股中位差 {{ point(board.medianStockSpreadPct) }}</p></details><span v-else>{{ row.boardDetails ? `${row.pairedBoards} 板块` : '旧结果未保存板块样本' }}</span></td><td>{{ point(row.spreadPct) }}</td><td>{{ point(row.medianStockSpreadPct) }}</td><td>{{ dayInfluence(row.withoutDayMeanPct) }}</td><td>{{ dayInfluence(row.influencePP) }}</td></tr></tbody></table></div>
+                <p v-if="!dailyBoardRows.length" class="footnote">当前分段／期限没有同日同板块双向配对，不输出零差值。</p>
               </details>
             </template>
           </details>
