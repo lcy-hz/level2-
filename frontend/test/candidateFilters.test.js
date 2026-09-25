@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { filterCandidates, normalizeCandidateFilters, priceDirection, stateNarrative } from '../src/candidateFilters.js'
+import { filterCandidates, normalizeCandidateFilters, priceDirection, stateNarrative, summarizeCandidatePools } from '../src/candidateFilters.js'
 
 const rows = [
   { code: '000001.SZ', name: '甲', label: '主动', returnSign: 1, net: 10 },
@@ -45,6 +45,16 @@ test('legacy focus defaults to deep-researched cards but explicit filters use th
     ['000001.SZ', '000003.SZ'])
   assert.deepEqual(filterCandidates(sample, { query: '乙', focusOnly: false }).map(row => row.code),
     ['000002.SZ'])
+})
+
+test('frozen focus pools distinguish pool members from separately followed stocks', () => {
+  const cards = rows.map(row => ({ ...row, detail: true }))
+  const lists = { 主动推动: ['000001.SZ', '000002.SZ'], 被动承接: ['000002.SZ'] }
+  assert.deepEqual(summarizeCandidatePools(lists, cards), {
+    pools: [{ name: '主动推动', count: 2 }, { name: '被动承接', count: 1 }], extra: ['000003.SZ'],
+  })
+  assert.equal(summarizeCandidatePools(null, cards), null)
+  assert.deepEqual(lists.主动推动, ['000001.SZ', '000002.SZ'])
 })
 
 test('default candidate order preserves each report or frozen snapshot record order', () => {

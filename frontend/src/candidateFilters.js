@@ -27,6 +27,14 @@ export function normalizeCandidateFilters(saved = {}) {
   }
 }
 
+export function summarizeCandidatePools(lists, cards) {
+  if (!lists || typeof lists !== 'object' || !Object.values(lists).some(Array.isArray)) return null
+  const pools = Object.entries(lists).filter(([, codes]) => Array.isArray(codes)).map(([name, codes]) => ({ name, count: codes.length }))
+  const pooled = new Set(Object.values(lists).filter(Array.isArray).flat())
+  const extra = cards.filter(card => card.detail && !pooled.has(card.code)).map(card => card.code)
+  return { pools, extra }
+}
+
 export function filterCandidates(cards, { query = '', label = 'all', direction = 'all', order = 'default',
   orderDirection = 'desc', stateChange = 'all', stateContinuity = 'all', stateView = null,
   focusOnly = false } = {}) {

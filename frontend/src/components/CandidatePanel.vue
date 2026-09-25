@@ -1,10 +1,11 @@
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue'
-import { filterCandidates, priceDirection, stateNarrative } from '../candidateFilters.js'
+import { filterCandidates, priceDirection, stateNarrative, summarizeCandidatePools } from '../candidateFilters.js'
 import KlineTrigger from './KlineTrigger.vue'
 import DetailEvidence from './DetailEvidence.vue'
 
 const props = defineProps({ cards: { type: Array, required: true }, day: { type: String, required: true },
+  lists: { type: Object, default: () => ({}) },
   frozen: { type: Boolean, default: false }, snapshotCharts: { type: Object, default: () => ({}) },
   initialFilters: { type: Object, default: () => ({}) }, stateView: { type: Object, default: null } })
 const emit = defineEmits(['chart-loaded', 'detail-loaded', 'filters-change'])
@@ -19,6 +20,7 @@ const page = ref(1)
 const selected = ref(null)
 const detailDialog = ref(null)
 const labels = computed(() => [...new Set(props.cards.map(card => card.label))].sort())
+const poolSummary = computed(() => summarizeCandidatePools(props.lists, props.cards))
 const linkedView = computed(() => props.stateView?.day === props.day ? props.stateView : null)
 const states = computed(() => new Map((linkedView.value?.stocks || []).map(stock => [stock.code, stock])))
 const selectedState = computed(() => selected.value ? states.value.get(selected.value.code) || null : null)
@@ -79,6 +81,9 @@ watch(pages, count => { if (page.value > count) page.value = count })
 <template>
   <section class="panel" aria-labelledby="candidates-title">
     <div class="section-heading"><div><span class="eyebrow">CANDIDATE EVIDENCE</span><h2 id="candidates-title">候选形成与变化</h2></div><span class="hint">全库 {{ cards.length.toLocaleString() }} 只 · 非交易建议</span></div>
+    <p class="footnote" v-if="poolSummary">重点名单按报告内冻结的重点池展示：{{ poolSummary.pools.map(pool => `${pool.name} ${pool.count} 只`).join(' · ') }}{{ poolSummary.extra.length ? `；另单独关注 ${poolSummary.extra.join('、')}` : '' }}。池间可重叠；默认重点名单与全库互斥标签不是同一个筛选口径。</p>
+    <p class="footnote" v-else>此报告未保存重点池名单；仅按已冻结的卡片标记展示默认重点股，不反推名单形成门槛。</p>
+    <details class="candidate-method"><summary>候选标签与历史收益口径</summary><p>当前生成器的重点池先要求目标日成交额 ≥ 2 亿元，池内按各自指标排序；实际成员以上述冻结名单为准。全库标签按顺序互斥归类：方向未知单列；上涨且净买入为主动推动；跌幅 0% 至 3% 且净买入为下跌承接；涨跌幅 -1% 至 +3% 且净卖出为被动承接候选；其余上涨且净卖出为高位分歧；剩余为弱势／其他。这些是描述标签，不是吸筹、派发或买卖确认。</p><p>逐日历史中的后 1／3 日仅为未复权的原始收盘变化，且只覆盖目标日仍存续的股票；不能作为无偏样本外收益验证。</p></details>
     <div class="filters">
       <label>名称或代码<input v-model="query" @input="resetPage" placeholder="搜索 000977 / 浪潮" /></label>
       <label>候选类型<select v-model="label" @change="resetPage"><option value="all">全部</option><option v-for="item in labels" :key="item">{{ item }}</option></select></label>
