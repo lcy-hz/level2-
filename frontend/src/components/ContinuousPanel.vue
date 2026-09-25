@@ -56,6 +56,7 @@ async function apply() {
   if (props.frozen) {
     document.value = props.snapshotViews[String(days)] || null
     status.value = document.value ? '只读：展示保存时的连续状态' : '此快照未保存该窗口；不读取最新数据补齐'
+    emit('view-applied', { window: days, view: document.value?.view || document.value || null })
     return
   }
   const id = ++sequence
