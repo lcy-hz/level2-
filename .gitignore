@@ -18,6 +18,7 @@
 !/level2_workspace_ui.html
 !/test_level2_*.py
 !/level2_state.py
+!/level2_peers.py
 !/level2_events.py
 !/level2_validation.py
 !/level2_state_view.py

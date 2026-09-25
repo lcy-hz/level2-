@@ -60,3 +60,11 @@ test('relative turnover sorts observed zero while missing stays last', () => {
   assert.deepEqual(codes(filterContinuousStocks(rows, {}, { sort: 'amountRelative', direction: 'asc' })), ['B', 'A', 'D', 'C'])
   assert.deepEqual(codes(filterContinuousStocks(rows, {}, { sort: 'amountRelative', direction: 'desc' })), ['D', 'A', 'B', 'C'])
 })
+
+test('peer percentile sorts valid observations and leaves unknown last', () => {
+  const rows = [{ code: 'A', sizeFlowPercentile: 50, liquidityFlowPercentile: null },
+    { code: 'B', sizeFlowPercentile: 20, liquidityFlowPercentile: 80 },
+    { code: 'C', sizeFlowPercentile: null, liquidityFlowPercentile: 20 }]
+  assert.deepEqual(codes(filterContinuousStocks(rows, {}, { sort: 'sizePeer', direction: 'desc' })), ['A', 'B', 'C'])
+  assert.deepEqual(codes(filterContinuousStocks(rows, {}, { sort: 'liquidityPeer', direction: 'asc' })), ['C', 'B', 'A'])
+})

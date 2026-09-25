@@ -11,6 +11,7 @@ from threading import Lock
 import duckdb
 from level2_contract import calendar
 from level2_events import observe
+from level2_peers import market_caps, rank_peers
 
 BASE=Path(__file__).resolve().parent
 CONFIG=BASE/'level2_research.json'
@@ -26,12 +27,14 @@ def stamp(p):
 
 def settings():
     from level2_paths import PATHS
-    defaults={'history_roots':[], 'trade_calendar':str(PATHS['stock_basic'].parent.parent/'trade_cal'/'trade_cal.csv'),'default_window':5,'max_window':60,'benchmark':None}
+    defaults={'history_roots':[], 'trade_calendar':str(PATHS['stock_basic'].parent.parent/'trade_cal'/'trade_cal.csv'),'default_window':5,'max_window':60,'benchmark':None,'daily_basic_root':None}
     if CONFIG.exists():defaults.update(json.loads(CONFIG.read_text()))
     for p in [defaults['trade_calendar'],*defaults['history_roots']]:
         if not isinstance(p,str) or not Path(p).is_absolute():raise ValueError('研究数据路径必须为绝对路径')
     if type(defaults['max_window']) is not int or not 1<=defaults['max_window']<=250:raise ValueError('max_window 必须为1至250的整数')
     if type(defaults['default_window']) is not int or not 1<=defaults['default_window']<=defaults['max_window']:raise ValueError('default_window 必须在最大窗口范围内')
+    if defaults['daily_basic_root'] is not None and (not isinstance(defaults['daily_basic_root'],str) or not Path(defaults['daily_basic_root']).is_absolute()):
+        raise ValueError('daily_basic_root 必须为绝对目录路径')
     benchmark=defaults['benchmark']
     if benchmark is not None:
         if not isinstance(benchmark,dict) or set(benchmark)!={'code','name','path'}:
@@ -164,7 +167,7 @@ class StateService:
     def metadata(self):
         cfg=settings();days,last=calendar(cfg['trade_calendar'])
         return {'days':days,'calendarThrough':last,'defaultWindow':cfg['default_window'],'maxWindow':cfg['max_window'],
-                'historyRoots':cfg['history_roots'],'benchmark':cfg['benchmark'],
+                'historyRoots':cfg['history_roots'],'benchmark':cfg['benchmark'],'dailyBasicRoot':cfg['daily_basic_root'],
                 'legacyDirection':'SOURCE_SCOPED_0_BUY_1_SELL_WITH_ID_GUARD'}
 
     def validate(self,day,window):
@@ -184,8 +187,9 @@ class StateService:
         from level2_paths import PATHS
         days=self.validate(day,window);dates=[d for d in days if d<=day][-window-1:]
         cfg=settings()
-        items=[stamp(cfg['trade_calendar']),stamp(CONFIG),stamp(Path(__file__)),stamp(BASE/'level2_contract.py'),stamp(BASE/'level2_events.py'),cfg]
+        items=[stamp(cfg['trade_calendar']),stamp(CONFIG),stamp(Path(__file__)),stamp(BASE/'level2_contract.py'),stamp(BASE/'level2_events.py'),stamp(BASE/'level2_peers.py'),cfg]
         if cfg['benchmark']:items.append(stamp(cfg['benchmark']['path']))
+        if cfg.get('daily_basic_root'):items.append(stamp(Path(cfg['daily_basic_root'])/f'{day}_daily_basic.csv'))
         for d in dates:
             p=self.source(d)
             items.extend([stamp(p) if p else [d,'missing'],stamp(PATHS['stk_factor_pro']/f'{d}_stk_factor_pro.csv')])
@@ -290,8 +294,10 @@ class StateService:
             benchmark=benchmark_evidence(settings()['benchmark'],dates,window)
             states={code:compute({d:rows[code] for d,rows in allrows.items() if code in rows},days,day,window,
                                  benchmark['returnPct']) for code in service.cards}
+            caps,cap_source=market_caps(settings()['daily_basic_root'],day)
+            peers=rank_peers(states,caps,cap_source)
             if identity!=self.identity(day,window):raise ValueError('计算期间来源变化，结果未发布')
-            result={'day':day,'window':window,'states':states,'sources':sources,'benchmark':benchmark,'identity':identity,
+            result={'day':day,'window':window,'states':states,'sources':sources,'benchmark':benchmark,'peers':peers,'identity':identity,
                     'eventMethod':'相邻交易日日级主动净额比严格变号或负值变化；状态仅随窗口内后续有效观测更新；未知不跨越',
                     'priceMethod':'本地 close×adj_factor 比值；N日收益使用窗口前一交易日为基点；历史当时可得性未验证',
                     'scope':'日级价格／成交额／已识别主动方向。已校准旧来源0买1卖，逐条买卖编号复核；未校准来源及冲突记录未知。无自动吸筹、支撑或买卖触发。'}

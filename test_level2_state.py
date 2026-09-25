@@ -129,6 +129,19 @@ class StateTests(unittest.TestCase):
                 self.assertNotEqual(first,service.identity(DAYS[-1],3))
             service.pool.shutdown()
 
+    def test_same_day_market_cap_file_is_part_of_source_identity(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base=Path(temp);root=base/'basic';root.mkdir()
+            source=root/'20260922_daily_basic.csv';source.write_text('ts_code,trade_date,total_mv\nA,20260922,100\n')
+            service=StateService(SimpleNamespace(base=base,root=base))
+            cfg={'trade_calendar':str(base/'calendar.csv'),'history_roots':[],
+                 'benchmark':None,'daily_basic_root':str(root)}
+            with patch.object(service,'validate',return_value=DAYS),patch('level2_state.settings',return_value=cfg):
+                first=service.identity(DAYS[-1],3)
+                source.write_text(source.read_text()+'B,20260922,200\n')
+                self.assertNotEqual(first,service.identity(DAYS[-1],3))
+            service.pool.shutdown()
+
     def test_snapshot_receipts_reject_changed_source_or_wrong_window(self):
         import json
         with tempfile.TemporaryDirectory() as temp:

@@ -118,9 +118,14 @@ class WorkspaceTests(unittest.TestCase):
         states={'1':{'day':'20260907','window':1,
                      'benchmark':{'status':'AVAILABLE','code':'000300.SH','name':'沪深300价格指数',
                                   'returnPct':1,'source':'/test/index.csv'},
+                     'peers':{'status':'AVAILABLE','source':'/test/daily_basic.csv',
+                              'sizeCoverage':1,'liquidityCoverage':1,'stockCount':1},
                      'sources':[{'day':'20260907','status':'NATIVE','source':'/test/deal_20260907.parquet',
                                  'priceStatus':'FILE_PRESENT','priceSource':'/test/20260907_stk_factor_pro.csv'}],
                      'states':{'000001.SZ':{'maxCloseDrawdown':-5,'drawdownPeakDay':'20260904','drawdownTroughDay':'20260907','relativeReturn':1,
+                                            'totalMv':1000,'sizeGroup':1,'sizeGroupCount':1,'sizePeerCount':1,
+                                            'sizeFlowPercentile':None,'liquidityGroup':1,'liquidityGroupCount':1,
+                                            'liquidityPeerCount':1,'liquidityFlowPercentile':None,
                                             'history':[{'day':'20260907','amount':100,'net':10,'ratio':10,'unknown':0,'priceDailyReturn':2}]}}}}
         with patch.object(self.w.state,'frozen',return_value=states):
             result=self.w.save({'day':'20260907','data':self.data,'stateWindow':1})
@@ -135,6 +140,8 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(bundle['stateViews']['1']['stocks'][0]['maxCloseDrawdown'],-5)
         self.assertEqual(bundle['stateViews']['1']['stocks'][0]['relativeReturn'],1)
         self.assertEqual(bundle['stateViews']['1']['benchmark']['returnPct'],1)
+        self.assertEqual(bundle['stateViews']['1']['peers']['sizeCoverage'],1)
+        self.assertEqual(bundle['stateViews']['1']['stocks'][0]['totalMv'],1000)
         self.assertIn(b'stateViews',self.w.frozen_page(result['id']))
         self.assertEqual(self.w.snapshot_document(result['id'])['stateViews']['1']['trajectory'][0]['ratio'],10)
 

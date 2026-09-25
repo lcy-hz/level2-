@@ -115,7 +115,7 @@ def derive(result):
         stocks.append({'code':code,**state,'viewDelta':delta,'change':change})
     stocks.sort(key=lambda row:row['code'])
     return {'method':'common-cohort-weighted-flow-and-breadth','eventMethod':result.get('eventMethod'),
-            'benchmark':result.get('benchmark'),'day':result.get('day'),'window':result['window'],
+            'benchmark':result.get('benchmark'),'peers':result.get('peers'),'day':result.get('day'),'window':result['window'],
             'dates':dates,'total':len(rows),'common':len(common),'priceCommon':len(price_common),'trajectory':trajectory,
             'marketState':market_state(trajectory,result['window'],len(common)),
             'priceState':price_state(trajectory,result['window'],len(price_common)),
