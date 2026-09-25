@@ -9,7 +9,7 @@ import argparse
 import json
 
 BASE = Path(__file__).resolve().parent
-LEGACY_BOOKMARK = 'level2-market-scan_20260922.html'
+LEGACY_BOOKMARKS = {'level2-market-scan_20260922.html', 'level2_state_ui.html'}
 FRONTEND = BASE / 'frontend' / 'dist'
 
 
@@ -41,7 +41,7 @@ def make_handler(service, port, minute_service=None, workspace=None):
             path = urlsplit(self.path).path
             query=parse_qs(urlsplit(self.path).query)
             day=query.get('date',[service.day if service else ''])[0]
-            if path == '/' + LEGACY_BOOKMARK:
+            if path.removeprefix('/') in LEGACY_BOOKMARKS:
                 # Historical bookmarks keep their selected evidence, but the old
                 # HTML renderer is no longer a second user-facing application.
                 selection={key:query[key][0] for key in ('snapshot','date') if key in query}
