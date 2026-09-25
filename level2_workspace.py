@@ -156,18 +156,26 @@ class Workspace:
             m=re.fullmatch(r'(?:deal|snapshot|order_raw)_(\d{8})\.parquet',p.name)
             if m:found.add(m[1])
         from level2_intraday import minute_directory
-        for p in minute_directory(self.root).glob('*.parquet'):
+        minute_root=minute_directory(self.root)
+        for p in minute_root.glob('*.parquet'):
             if DATE.fullmatch(p.stem):found.add(p.stem)
+        # A manifest can be large; a date may occur in several overlapping
+        # windows. Share its gate result only within this request so the next
+        # request still observes changed files or publication markers.
+        gate_results={}
+        def checked_gate(day):
+            if day not in gate_results:gate_results[day]=self.gate(day)
+            return gate_results[day]
         rows=[]
         for day in sorted(found,reverse=True):
             try:window=self.window(day)
             except (OSError,ValueError):window=[]
-            missing=self.gate(day)
-            window_missing=[d for d in window if self.gate(d)]
+            missing=checked_gate(day)
+            window_missing=[d for d in window if checked_gate(d)]
             ready=(len(window)==7 and window[-1]==day and not window_missing and not missing)
             rows.append({'day':day,'complete':not missing,'missing':missing,'window':window,
                          'windowMissing':window_missing,'canBuild':ready,
-                         'minute':(minute_directory(self.root)/f'{day}.parquet').is_file(),
+                         'minute':(minute_root/f'{day}.parquet').is_file(),
                          **self.status(day)})
         return rows
 

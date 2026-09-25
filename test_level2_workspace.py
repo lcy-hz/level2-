@@ -52,6 +52,18 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(self.w.dates()[0]['windowMissing'],['20260904'])
         with self.assertRaises(ValueError):self.w.build('20260907')
 
+    def test_dates_reuses_gate_only_within_request(self):
+        with patch.object(self.w,'status',return_value={'status':'missing','message':'待计算'}), \
+             patch.object(self.w,'gate',wraps=self.w.gate) as gate:
+            rows=self.w.dates()
+            self.assertEqual(gate.call_count,7)
+            self.assertTrue(rows[0]['canBuild'])
+            (self.root/'_conversion_audit'/'20260904'/'COMMITTED').unlink()
+            rows=self.w.dates()
+            self.assertEqual(gate.call_count,14)
+            self.assertFalse(rows[0]['canBuild'])
+            self.assertEqual(rows[0]['windowMissing'],['20260904'])
+
     def test_workspace_starts_without_report_and_minutes_follow_selected_date(self):
         self.report.unlink()
         bare=Workspace(base=self.base,calendar=self.calendar,root=self.root)
