@@ -95,9 +95,14 @@ async function apply() {
   const days = Number(windowDays.value)
   if (!Number.isInteger(days) || days < 1 || days > 60) { status.value = '窗口必须是 1 至 60 个交易日'; return }
   if (props.frozen) {
-    document.value = props.snapshotViews[String(days)] || null
-    status.value = document.value ? '只读：展示保存时的连续状态' : '此快照未保存该窗口；不读取最新数据补齐'
-    emit('view-applied', { window: days, view: document.value?.view || document.value || null })
+    const saved = props.snapshotViews[String(days)]
+    if (!saved) {
+      status.value = `此快照未保存 ${days} 日窗口；${view.value ? `仍展示此前已应用的 ${view.value.window} 日结果` : '暂无可展示结果'}，不读取最新数据补齐`
+      return
+    }
+    document.value = saved
+    status.value = '只读：展示保存时的连续状态'
+    emit('view-applied', { window: days, view: saved.view || saved })
     return
   }
   const id = ++sequence
