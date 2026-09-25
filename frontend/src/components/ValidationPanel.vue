@@ -41,6 +41,14 @@ const rows = computed(() => viewRows(result.value, selectedCohort.value, selecte
 const chosenRule = computed(() => rows.value.some(row => row.rule === selectedRule.value) ? selectedRule.value : rows.value[0]?.rule)
 const dayBreakdown = computed(() => rows.value.find(row => row.rule === chosenRule.value)?.signalDayBreakdown)
 const sourceBreakdown = computed(() => sourceStrata(result.value, dayBreakdown.value))
+const timingFlagged = computed(() => {
+  const audit = result.value?.inputTimingAudit
+  if (!audit) return []
+  return [...(audit.flow?.days || []).map(row => ({ ...row, type: 'Level‑2 成交' })),
+    ...(audit.price?.days || []).map(row => ({ ...row, type: '复权日线' }))]
+    .filter(row => !row.present || row.modifiedAfterTradeDay)
+    .sort((a, b) => a.day.localeCompare(b.day) || a.type.localeCompare(b.type))
+})
 const counts = computed(() => {
   const values = rows.value
   return { observed: values.reduce((total, row) => total + row.observed, 0),
@@ -140,7 +148,7 @@ onBeforeUnmount(() => { sequence++; detailSequence++; clearTimeout(timer) })
 <template>
   <section class="panel validation-panel" aria-labelledby="validation-title">
     <div class="section-heading"><div><span class="eyebrow">OUTCOME STUDY · RESEARCH ONLY</span><h2 id="validation-title">事件后续验证</h2></div><span class="hint">训练／隔离／样本外明确分开</span></div>
-    <p class="footnote">固定比较日级主动成交事件触发后 1／3／5 个交易日的收盘到收盘价格变化；事件只在触发日数据就绪后可识别。次日日线门槛只检查可观察性及单一价位，不证明排队成交。收盘路径回撤要求沿途价格齐全，不代表盘中或策略回撤。这里不是买点、卖点或可成交收益。</p>
+    <p class="footnote">固定比较日级主动成交事件触发后 1／3／5 个交易日的收盘到收盘价格变化；训练／样本外仅按交易日期切分，尚非严格 PIT。事件只在触发日数据就绪后可识别。次日日线门槛只检查可观察性及单一价位，不证明排队成交。收盘路径回撤要求沿途价格齐全，不代表盘中或策略回撤。这里不是买点、卖点或可成交收益。</p>
     <div v-if="!frozen" class="validation-controls">
       <label>事件起点<input v-model.trim="fields.start" inputmode="numeric" maxlength="8" aria-label="事件起点 YYYYMMDD" /></label>
       <label>训练截止<input v-model.trim="fields.split" inputmode="numeric" maxlength="8" aria-label="训练截止 YYYYMMDD" /></label>
@@ -156,6 +164,9 @@ onBeforeUnmount(() => { sequence++; detailSequence++; clearTimeout(timer) })
       <p v-if="result.signalDaysExcludedSource?.length" class="footnote validation-source-warning">来源不可直接比较：已排除 {{ result.signalDaysExcludedSource.length }} 个事件日（{{ result.signalDaysExcludedSource.map(item => `${item.day} ${sourcePair(result, item.day)}`).join('；') }}）。这些日期未进入下方事件数或后续统计。</p>
       <p v-if="result.signalDaysExcludedSource == null" class="footnote validation-source-warning">旧研究未保存跨来源排除记录；无法核验是否执行当前来源门槛，须重新计算后才能按当前口径比较。</p>
       <p v-if="mixedSourceWarning(result)" class="footnote validation-source-warning">研究窗口同时包含已校准旧格式与正式新格式 Level‑2；即使排除了交界日，训练／隔离／样本外的差异仍可能混有来源与时期效应。</p>
+      <p v-if="result.inputTimingAudit" class="footnote validation-source-warning">输入时序：Level‑2 文件 {{ result.inputTimingAudit.flow.present }}/{{ result.inputTimingAudit.flow.requested }} 存在、{{ result.inputTimingAudit.flow.modifiedAfterTradeDay }} 日最后修改晚于交易日；复权日线 {{ result.inputTimingAudit.price.present }}/{{ result.inputTimingAudit.price.requested }} 存在、{{ result.inputTimingAudit.price.modifiedAfterTradeDay }} 日最后修改晚于交易日。修改时间不能证明首次可得时间；严格 PIT 未验收。</p>
+      <p v-else class="footnote validation-source-warning">旧研究未保存输入文件时序审计；不能据此认定为严格 PIT 样本外结果。</p>
+      <details v-if="result.inputTimingAudit" class="validation-event validation-day-breakdown"><summary>输入时序异常／缺档明细 · {{ timingFlagged.length }} 项</summary><p class="footnote">只列缺档或文件最后修改日期晚于交易日的记录；其余文件也未证明当时可得。复制、回填和保留原时间戳均可改变这种线索的含义。</p><div v-if="timingFlagged.length" class="table-scroll"><table class="validation-table"><thead><tr><th>交易日</th><th>输入</th><th>本地最后修改时间</th><th>线索</th></tr></thead><tbody><tr v-for="row in timingFlagged" :key="row.type + row.day"><th scope="row">{{ row.day }}</th><td>{{ row.type }}</td><td>{{ row.modifiedAtLocal || '无文件' }}</td><td>{{ row.present ? '晚于交易日' : '缺档' }}</td></tr></tbody></table></div><p v-else class="footnote">未发现缺档或晚修改文件；这仍不能证明历史当时可得。</p></details>
       <div class="validation-filters"><label>样本分段<select v-model="selectedCohort"><option v-for="(name, key) in cohortName" :key="key" :value="key">{{ name }}</option></select></label><label>后续交易日<select v-model.number="selectedHorizon"><option v-for="day in horizons" :key="day" :value="day">后 {{ day }} 日</option></select></label><span>{{ cohortName[selectedCohort] }} · 已观察 {{ counts.observed.toLocaleString() }} 条 · 未到期 {{ counts.pending.toLocaleString() }} 条 · 各类最多 {{ counts.days }} 个已观察事件日</span></div>
       <div v-if="rows.length" class="table-scroll"><table class="validation-table"><thead><tr><th>事件</th><th>触发数</th><th>已观察／未到期／缺价格</th><th>次日日线门槛</th><th>已观察／触发日</th><th>平均收益</th><th>收盘路径回撤中位</th><th>同日基准超额</th><th>按事件日等权超额</th><th>基准平均覆盖</th></tr></thead><tbody><tr v-for="row in rows" :key="row.rule"><td>{{ ruleName[row.rule] || row.rule }}</td><td>{{ row.events.toLocaleString() }}</td><td>{{ row.observed.toLocaleString() }} / {{ row.pending.toLocaleString() }} / {{ row.missingPrice.toLocaleString() }}</td><td>{{ entryCounts(row) }}</td><td>{{ row.signalDays }} / {{ row.triggerDays ?? '旧结果未知' }}</td><td>{{ formatPct(row.meanReturnPct) }}</td><td>{{ drawdownSummary(row) }}</td><td>{{ formatPct(row.meanExcessPct) }}</td><td>{{ formatPct(row.equalDayMeanExcessPct) }}</td><td>{{ row.benchmarkPoolMeanN == null ? '未知' : row.benchmarkPoolMeanN.toFixed(0) + ' 只' }}</td></tr></tbody></table></div>
       <p v-else class="footnote">此分段／期限没有已识别事件；不补零，也不推出无效结论。</p>

@@ -1,11 +1,14 @@
 import unittest
 import tempfile
 import json
+import os
 import statistics
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
-from level2_validation import study, ValidationService, entry_gate, close_path_drawdown
+from level2_validation import study, ValidationService, entry_gate, close_path_drawdown, file_timing, input_timing_audit
 
 
 DAYS = ['20260914', '20260915', '20260916', '20260917', '20260918',
@@ -17,6 +20,30 @@ def flow(ratio):
 
 
 class ValidationTests(unittest.TestCase):
+    def test_local_file_timing_is_audit_evidence_not_pit_proof(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            flow_file = root / 'deal_20260922.parquet'
+            price_file = root / '20260922_stk_factor_pro.csv'
+            flow_file.write_bytes(b'flow')
+            price_file.write_text('price')
+            timezone = ZoneInfo('Asia/Shanghai')
+            flow_stamp = datetime(2026, 9, 22, 21, 0, tzinfo=timezone).timestamp()
+            price_stamp = datetime(2026, 9, 23, 5, 7, tzinfo=timezone).timestamp()
+            os.utime(flow_file, (flow_stamp, flow_stamp))
+            os.utime(price_file, (price_stamp, price_stamp))
+            audit = input_timing_audit([
+                {'day': '20260922', 'source': str(flow_file)},
+                {'day': '20260923', 'source': None}], ['20260922', '20260923'], root)
+            self.assertEqual((audit['method'], audit['strictPitVerified']),
+                             ('LOCAL_LAST_MODIFIED_ONLY_NOT_PIT', False))
+            self.assertEqual(audit['flow']['requested'], 2)
+            self.assertEqual(audit['flow']['present'], 1)
+            self.assertEqual(audit['flow']['modifiedAfterTradeDay'], 0)
+            self.assertEqual(audit['price']['modifiedAfterTradeDay'], 1)
+            self.assertEqual(audit['price']['days'][0]['modifiedAtLocal'], '2026-09-23T05:07:00+08:00')
+            self.assertEqual(file_timing('20260923', None)['modifiedAfterTradeDay'], None)
+
     def test_close_path_drawdown_requires_every_session_and_keeps_zero(self):
         path = [('20260915', 100), ('20260916', 110), ('20260917', 99)]
         drawdown, peak, trough = close_path_drawdown(path)

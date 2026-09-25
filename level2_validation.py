@@ -13,9 +13,11 @@ import uuid
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
+from datetime import datetime
 from pathlib import Path
 from threading import Lock
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 from level2_events import kind, usable
 
@@ -77,6 +79,28 @@ def _file_hash(path):
         for block in iter(lambda: source.read(1024 * 1024), b''):
             digest.update(block)
     return digest.hexdigest()
+
+
+def file_timing(day, path):
+    """Local last-write evidence only; not first availability or point-in-time proof."""
+    if path is None or not Path(path).is_file():
+        return {'day': day, 'present': False, 'modifiedAtLocal': None,
+                'modifiedAfterTradeDay': None}
+    modified = datetime.fromtimestamp(Path(path).stat().st_mtime, ZoneInfo('Asia/Shanghai'))
+    return {'day': day, 'present': True, 'modifiedAtLocal': modified.isoformat(timespec='seconds'),
+            'modifiedAfterTradeDay': modified.strftime('%Y%m%d') > day}
+
+
+def input_timing_audit(flow_sources, price_days, price_root):
+    """Freeze the local file timeline alongside a result without claiming strict PIT."""
+    flow = [file_timing(item['day'], item.get('source')) for item in flow_sources]
+    price = [file_timing(day, Path(price_root) / f'{day}_stk_factor_pro.csv') for day in price_days]
+    def counts(rows):
+        return {'requested': len(rows), 'present': sum(row['present'] for row in rows),
+                'modifiedAfterTradeDay': sum(row['modifiedAfterTradeDay'] is True for row in rows),
+                'days': rows}
+    return {'method': 'LOCAL_LAST_MODIFIED_ONLY_NOT_PIT', 'strictPitVerified': False,
+            'flow': counts(flow), 'price': counts(price)}
 
 
 def study(flows, prices, days, start, end, asof, split, horizons=(1, 3, 5),
@@ -303,11 +327,13 @@ def local_study(start, end, asof, split, horizons=(1, 3, 5),
         result = study(flows, prices, days, start, end, asof, split, horizons,
                        collect_observations=collect_observations, on_observation=on_observation,
                        bars=bars, flow_sources={item['day']: item['status'] for item in sources})
+        timing_audit = input_timing_audit(sources, price_days, PATHS['stk_factor_pro'])
         if before != study_identity(start, end, asof, split, horizons):
             raise ValueError('研究期间输入来源变化，结果未发布')
         result['sourceIdentity'] = before
         result['flowSources'] = sources
         result['priceCoverage'] = {day: len(prices[day]) for day in price_days}
+        result['inputTimingAudit'] = timing_audit
         return result
     finally:
         state.pool.shutdown(wait=False)
