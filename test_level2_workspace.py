@@ -49,6 +49,30 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(self.w.dates()[0]['windowMissing'],['20260904'])
         with self.assertRaises(ValueError):self.w.build('20260907')
 
+    def test_workspace_starts_without_report_and_minutes_follow_selected_date(self):
+        self.report.unlink()
+        bare=Workspace(base=self.base,calendar=self.calendar,root=self.root)
+        try:
+            rows=bare.dates()
+            self.assertEqual(rows[0]['day'],'20260907')
+            self.assertEqual(rows[0]['status'],'missing')
+            self.assertTrue(rows[0]['canBuild'])
+            with self.assertRaisesRegex(ValueError,'未就绪'):
+                bare.get_service('20260907')
+            self.report.write_text(json.dumps(self.data))
+            other=bare.report_path('20260906')
+            other.parent.mkdir(parents=True)
+            other.write_text(json.dumps({'markets':[{'day':'20260906'}],
+                                         'cards':[{'code':'000001.SZ','close':11}]}))
+            with patch.object(bare,'status',return_value={'status':'ready'}):
+                first=bare.get_minute_service('20260907')
+                second=bare.get_minute_service('20260906')
+                self.assertIs(first,bare.get_minute_service('20260907'))
+            self.assertEqual((first.day,second.day),('20260907','20260906'))
+            self.assertIsNot(first,second)
+        finally:
+            bare.close()
+
     def test_calendar_missing_day_is_not_shortened(self):
         self.calendar.write_text(self.calendar.read_text().replace('SSE,20260904,1\n',''))
         with self.assertRaisesRegex(ValueError,'缺口'):self.w.window('20260907')

@@ -87,14 +87,18 @@ def report_sources_match(recorded, current):
 
 
 class Workspace:
-    def __init__(self,service,base=BASE,calendar=None):
+    def __init__(self,service=None,base=BASE,calendar=None,root=None):
         from level2_state import settings
-        self.base,self.root,self.default=Path(base),service.root,service
+        from level2_paths import PATHS
+        self.base=Path(base)
+        self.root=Path(root) if root is not None else service.root if service is not None else PATHS['level2']
         self.calendar=Path(calendar) if calendar else Path(settings()['trade_calendar'])
         self.reports=self.base/'.level2_reports'
         self.snapshots=self.base/'level2_snapshots'
         self.receipts=self.base/'.level2_chart_receipts'
-        self.services={service.day:service};self.jobs={};self.lock=Lock()
+        self.services={service.day:service} if service is not None else {}
+        self.minute_services={}
+        self.jobs={};self.lock=Lock()
         self.pool=ThreadPoolExecutor(max_workers=1)
         from level2_state import StateService
         self.state=StateService(self)
@@ -197,6 +201,24 @@ class Workspace:
                 self.services[day]=Service(read_report(self.report_path(day)),root=self.root)
             return self.services[day]
 
+    def get_minute_service(self,day):
+        from level2_detail_service import Service
+        from level2_intraday import calculate_intraday, minute_identity
+        report_service=self.get_service(day)
+        with self.lock:
+            if day not in self.minute_services:
+                self.minute_services[day]=Service(report_service.report,root=self.root,
+                    cache=self.base/'.level2_minute_cache',calculator=calculate_intraday,identity=minute_identity)
+            return self.minute_services[day]
+
+    def close(self):
+        for service in [*self.services.values(),*self.minute_services.values()]:
+            service.pool.shutdown(wait=False,cancel_futures=True)
+        self.pool.shutdown(wait=False,cancel_futures=True)
+        self.state.pool.shutdown(wait=False,cancel_futures=True)
+        if self._patterns:self._patterns.pool.shutdown(wait=False,cancel_futures=True)
+        if self._validation:self._validation.pool.shutdown(wait=False,cancel_futures=True)
+
     def report_document(self,day):
         """Read-only, source-gated payload shared by the HTML and future clients."""
         service=self.get_service(day)
@@ -237,7 +259,9 @@ class Workspace:
             target.with_suffix('.provenance.json').write_text(encoded({'sourceDigest':digest(initial),'sources':initial,'generatedAt':datetime.now(timezone.utc).isoformat()}))
             with self.lock:
                 previous=self.services.pop(day,None)
-                if previous and previous is not self.default:previous.pool.shutdown(wait=False)
+                old_minute=self.minute_services.pop(day,None)
+                if previous:previous.pool.shutdown(wait=False,cancel_futures=True)
+                if old_minute:old_minute.pool.shutdown(wait=False,cancel_futures=True)
                 self.jobs[day]={'status':'ready','message':'全市场报告计算完成'}
         except Exception as exc:
             with self.lock:self.jobs[day]={'status':'error','message':'报告计算失败：'+str(exc)}

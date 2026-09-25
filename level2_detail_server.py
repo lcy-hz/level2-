@@ -8,8 +8,6 @@ from urllib.parse import urlencode
 import argparse
 import json
 
-from level2_detail_service import Service, read_report
-
 BASE = Path(__file__).resolve().parent
 LEGACY_BOOKMARK = 'level2-market-scan_20260922.html'
 FRONTEND = BASE / 'frontend' / 'dist'
@@ -42,7 +40,7 @@ def make_handler(service, port, minute_service=None, workspace=None):
                 return
             path = urlsplit(self.path).path
             query=parse_qs(urlsplit(self.path).query)
-            day=query.get('date',[service.day])[0]
+            day=query.get('date',[service.day if service else ''])[0]
             if path == '/' + LEGACY_BOOKMARK:
                 # Historical bookmarks keep their selected evidence, but the old
                 # HTML renderer is no longer a second user-facing application.
@@ -127,9 +125,10 @@ def make_handler(service, port, minute_service=None, workspace=None):
                     self.respond(current.status(path.removeprefix('/api/detail/')))
                 except ValueError as exc:
                     self.respond({'status': 'error', 'message': str(exc)}, 400)
-            elif path.startswith('/api/minute/') and minute_service is not None:
+            elif path.startswith('/api/minute/') and (workspace is not None or minute_service is not None):
                 try:
-                    self.respond(minute_service.status(path.removeprefix('/api/minute/')))
+                    current=workspace.get_minute_service(day) if workspace else minute_service
+                    self.respond(current.status(path.removeprefix('/api/minute/')))
                 except ValueError as exc:
                     self.respond({'status': 'error', 'message': str(exc)}, 400)
             elif path.startswith('/api/chart/'):
@@ -179,12 +178,18 @@ def make_handler(service, port, minute_service=None, workspace=None):
                     self.respond(workspace.build(data.get('day')) if path=='/api/report/build' else workspace.state.start(data.get('day'),data.get('window')) if path=='/api/state' else workspace.patterns.start(data.get('day')) if path=='/api/patterns' else workspace.validation.start(data) if path=='/api/validation' else workspace.save(data),201)
                 except Exception as exc:self.respond({'status':'error','message':str(exc)},400)
                 return
+            if path not in ('/api/detail','/api/minute') or self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
+                self.send_error(404)
+                return
             try:
-                current=workspace.get_service(query.get('date',[service.day])[0]) if workspace else service
+                day=query.get('date',[service.day if service else ''])[0]
+                if path == '/api/detail':
+                    selected=workspace.get_service(day) if workspace else service
+                else:
+                    selected=workspace.get_minute_service(day) if workspace else minute_service
             except ValueError as exc:
                 self.respond({'status':'error','message':str(exc)},400);return
-            selected = current if path == '/api/detail' else minute_service if path == '/api/minute' else None
-            if selected is None or self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
+            if selected is None:
                 self.send_error(404)
                 return
             try:
@@ -204,20 +209,12 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int, default=18762)
     args = parser.parse_args()
-    service = Service()
-    from level2_intraday import calculate_intraday, minute_identity
-    minute_service = Service(report=service.report, cache=BASE / '.level2_minute_cache', calculator=calculate_intraday, identity=minute_identity)
     from level2_workspace import Workspace
-    workspace=Workspace(service)
-    server = ThreadingHTTPServer(('127.0.0.1', args.port), make_handler(service, args.port, minute_service, workspace))
+    workspace=Workspace()
+    server = ThreadingHTTPServer(('127.0.0.1', args.port), make_handler(None, args.port, workspace=workspace))
     print(f'Local Level-2 service: http://127.0.0.1:{args.port}/', flush=True)
     try:
         server.serve_forever()
     finally:
         server.server_close()
-        service.pool.shutdown(wait=False, cancel_futures=True)
-        minute_service.pool.shutdown(wait=False, cancel_futures=True)
-        workspace.pool.shutdown(wait=False, cancel_futures=True)
-        workspace.state.pool.shutdown(wait=False, cancel_futures=True)
-        if workspace._patterns:workspace._patterns.pool.shutdown(wait=False,cancel_futures=True)
-        if workspace._validation:workspace._validation.pool.shutdown(wait=False,cancel_futures=True)
+        workspace.close()

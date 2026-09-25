@@ -22,6 +22,13 @@ class ReportApiTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'必须是 JSON'):
                 read_report(report)
 
+    def test_formal_report_requires_a_dated_market(self):
+        with tempfile.TemporaryDirectory() as directory:
+            report=Path(directory)/'report.json'
+            report.write_text(json.dumps({'markets':[],'cards':[]}))
+            with self.assertRaisesRegex(ValueError,'结构无效'):
+                read_report(report)
+
     def setUp(self):
         report={'markets':[{'day':'20260922','stocks':1}],
                 'cards':[{'code':'000001.SZ','net':None,'unknownAmount':100}]}
@@ -70,6 +77,23 @@ class ReportApiTests(unittest.TestCase):
         with self.assertRaises(HTTPError) as context:
             self.fetch('/api/report/data?date=20260921')
         self.assertEqual(context.exception.code,400)
+
+    def test_date_catalog_works_without_a_bootstrap_report(self):
+        workspace=SimpleNamespace(dates=lambda:[{'day':'20260923','status':'missing','canBuild':True}])
+        server=ThreadingHTTPServer(('127.0.0.1',0),make_handler(None,0,workspace=workspace))
+        port=server.server_port
+        server.RequestHandlerClass=make_handler(None,port,workspace=workspace)
+        thread=Thread(target=server.serve_forever,daemon=True)
+        thread.start()
+        try:
+            with urlopen(f'http://127.0.0.1:{port}/api/dates') as response:
+                self.assertEqual(json.load(response)[0]['day'],'20260923')
+            with urlopen(f'http://127.0.0.1:{port}/') as response:
+                self.assertIn('<div id="app"></div>',response.read().decode())
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
 
     def test_one_vue_entry_and_legacy_bookmark_redirect(self):
         with urlopen(f'http://127.0.0.1:{self.port}/') as response:

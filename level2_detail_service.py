@@ -9,22 +9,24 @@ from level2_detail_research import calculate, source_identity
 from level2_paths import PATHS
 
 BASE = Path(__file__).resolve().parent
-REPORT = BASE / '.level2_reports' / '20260922' / 'report.json'
 SOURCE = PATHS['level2']
 CACHE = BASE / '.level2_detail_cache'
 
 
-def read_report(path=REPORT):
+def read_report(path):
     if Path(path).suffix != '.json':raise ValueError('正式报告必须是 JSON')
     data=json.loads(Path(path).read_text(encoding='utf-8'))
-    if not isinstance(data,dict) or not isinstance(data.get('markets'),list) or not isinstance(data.get('cards'),list):
+    if (not isinstance(data,dict) or not isinstance(data.get('markets'),list) or not data['markets']
+            or not isinstance(data['markets'][-1],dict)
+            or not re.fullmatch(r'\d{8}',str(data['markets'][-1].get('day','')))
+            or not isinstance(data.get('cards'),list)):
         raise ValueError('报告 JSON 结构无效')
     return data
 
 
 class Service:
-    def __init__(self, report=None, root=SOURCE, cache=CACHE, calculator=calculate, identity=source_identity):
-        self.report = read_report() if report is None else report
+    def __init__(self, report, root=SOURCE, cache=CACHE, calculator=calculate, identity=source_identity):
+        self.report = report
         self.day = self.report['markets'][-1]['day']
         self.cards = {c['code']: c for c in self.report['cards']}
         self.root, self.cache, self.calculator = root, cache, calculator

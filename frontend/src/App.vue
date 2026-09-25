@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { dates, report, reportStatus, saveSnapshot, snapshot, snapshots, startReportBuild, stateMeta } from './api.js'
-import { adjacentTradingDay } from './tradingDays.js'
+import { adjacentTradingDay, initialReportDay } from './tradingDays.js'
 import { normalizeCandidateFilters } from './candidateFilters.js'
 import MarketTimeline from './components/MarketTimeline.vue'
 import QualitySummary from './components/QualitySummary.vue'
@@ -11,7 +11,7 @@ import PatternPanel from './components/PatternPanel.vue'
 import ValidationPanel from './components/ValidationPanel.vue'
 
 const params = new URLSearchParams(location.search)
-const selectedDay = ref(params.get('date') || '20260922')
+const selectedDay = ref(params.get('date') || '')
 const targetDay = ref(selectedDay.value)
 const snapshotId = ref(params.get('snapshot') || '')
 const dateRows = ref([])
@@ -205,7 +205,14 @@ onMounted(async () => {
   if (dateList.status === 'fulfilled') dateRows.value = dateList.value
   if (snapshotList.status === 'fulfilled') saved.value = snapshotList.value
   if (calendar.status === 'fulfilled') tradingDays.value = calendar.value.days || []
-  await load()
+  if (!snapshotId.value && !params.has('date')) {
+    selectedDay.value = initialReportDay(dateRows.value)
+    targetDay.value = selectedDay.value
+  }
+  if (snapshotId.value || selectedDay.value) await load()
+  else error.value = dateList.status === 'rejected'
+    ? `本地日期读取失败：${dateList.reason?.message || '请检查服务和数据路径'}`
+    : '本地尚无可识别的 Level-2 日期；请检查数据路径与正式文件。'
 })
 onBeforeUnmount(() => { buildRequest++; clearTimeout(buildTimer) })
 </script>
@@ -214,7 +221,7 @@ onBeforeUnmount(() => { buildRequest++; clearTimeout(buildTimer) })
   <main class="shell">
     <header class="hero">
       <div class="hero-copy"><span class="eyebrow">RESEARCH_ONLY · 本地 Level-2</span><h1>连续市场与个股证据</h1><p>同一份 Python 报告数据，分离成可核验的服务接口与交互页面。</p></div>
-      <div class="hero-meta"><span>当前证据日</span><strong>{{ document?.day || selectedDay }}</strong><small>{{ snapshotId ? '只读快照 · 不补读最新数据' : '本地报告 · 非实时行情' }}</small></div>
+      <div class="hero-meta"><span>当前证据日</span><strong>{{ document?.day || selectedDay || '未选择' }}</strong><small>{{ snapshotId ? '只读快照 · 不补读最新数据' : '本地报告 · 非实时行情' }}</small></div>
     </header>
 
     <nav class="toolbar" aria-label="报告选择">
