@@ -1,6 +1,7 @@
 import unittest
 import tempfile
 import json
+import statistics
 from pathlib import Path
 from unittest.mock import patch
 
@@ -226,10 +227,39 @@ class ValidationTests(unittest.TestCase):
         result = study(flows, prices, DAYS, '20260915', '20260917', '20260918', '20260915', (1,))
         same_rule = next(x for x in result['summary'] if x['rule'] == 'SELL_EASING' and x['cohort'] == 'OUT_OF_SAMPLE')
         self.assertEqual(same_rule['signalDays'], 2)
+        self.assertEqual(same_rule['triggerDays'], 2)
         self.assertEqual(same_rule['observed'], 3)
         self.assertEqual(same_rule['benchmarkPoolMeanN'], 3)
         self.assertAlmostEqual(same_rule['meanExcessPct'], 40 / 9)
         self.assertAlmostEqual(same_rule['equalDayMeanExcessPct'], 10 / 3)
+        daily = same_rule['signalDayBreakdown']
+        self.assertEqual([row['day'] for row in daily], ['20260916', '20260917'])
+        self.assertEqual([(row['events'], row['observed'], row['pending'], row['missingPrice'])
+                          for row in daily], [(2, 2, 0, 0), (1, 1, 0, 0)])
+        self.assertAlmostEqual(daily[0]['meanReturnPct'], 20)
+        self.assertAlmostEqual(daily[0]['benchmarkPct'], 40 / 3)
+        self.assertAlmostEqual(daily[0]['meanExcessPct'], 20 / 3)
+        self.assertAlmostEqual(daily[1]['meanExcessPct'], 0)
+        self.assertAlmostEqual(statistics.mean(row['meanExcessPct'] for row in daily),
+                               same_rule['equalDayMeanExcessPct'])
+
+    def test_daily_breakdown_keeps_immature_and_missing_separate(self):
+        flows = {'20260914': {'A': flow(-4), 'B': flow(-4)},
+                 '20260915': {'A': flow(-2), 'B': flow(-2)},
+                 '20260916': {'A': flow(-1), 'B': flow(-1)}}
+        prices = {'20260915': {'A': 100, 'B': 100},
+                  '20260916': {'A': 105}, '20260917': {'A': 110}}
+        result = study(flows, prices, DAYS, '20260915', '20260916', '20260916',
+                       '20260915', (1,))
+        summary = next(row for row in result['summary']
+                       if row['rule'] == 'SELL_EASING' and row['cohort'] == 'OUT_OF_SAMPLE')
+        self.assertEqual((summary['signalDays'], summary['triggerDays']), (0, 1))
+        rows = summary['signalDayBreakdown']
+        self.assertEqual([(row['day'], row['observed'], row['pending'], row['missingPrice'])
+                          for row in rows], [('20260916', 0, 2, 0)])
+        self.assertIsNone(rows[0]['meanReturnPct'])
+        self.assertIsNone(rows[0]['meanExcessPct'])
+        self.assertIsNone(rows[0]['benchmarkN'])
 
     def test_streamed_summary_matches_collected_observations(self):
         flows = {'20260914': {'A': flow(-4), 'B': flow(-4)},

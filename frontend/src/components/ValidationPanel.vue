@@ -15,6 +15,7 @@ const pending = ref(false)
 const status = ref(props.frozen ? props.saved ? '只读：展示保存时的描述性研究' : '此快照未保存事件后续收益；不会读取最新数据补齐' : '确认观察日期后手动计算；参数改变不会自动覆盖已展示结果')
 const selectedCohort = ref('OUT_OF_SAMPLE')
 const selectedHorizon = ref(1)
+const selectedRule = ref('')
 const lookup = ref('')
 const selectedCode = ref('')
 const detailByCode = ref(props.frozen ? props.savedDetails : {})
@@ -37,6 +38,8 @@ const evidenceDays = computed(() => {
   return [...grouped].map(([day, rows]) => ({ day, rows: rows.sort((a, b) => a.horizon - b.horizon) }))
 })
 const rows = computed(() => viewRows(result.value, selectedCohort.value, selectedHorizon.value))
+const chosenRule = computed(() => rows.value.some(row => row.rule === selectedRule.value) ? selectedRule.value : rows.value[0]?.rule)
+const dayBreakdown = computed(() => rows.value.find(row => row.rule === chosenRule.value)?.signalDayBreakdown)
 const counts = computed(() => {
   const values = rows.value
   return { observed: values.reduce((total, row) => total + row.observed, 0),
@@ -129,6 +132,7 @@ const entryGateName = { PENDING: '次日未到', MISSING_BAR: '缺日线', MISSI
 const entryCounts = row => row.entryGateCounts ? Object.entries(row.entryGateCounts).map(([key, count]) => `${entryGateName[key] || key} ${count}`).join(' · ') : '旧结果未保存'
 const drawdownSummary = row => row.closeDrawdownObserved == null ? '旧结果未保存' : row.closeDrawdownObserved ? `${formatPct(row.medianMaxCloseDrawdownPct)} · ${row.closeDrawdownObserved}/${row.events} 条路径` : `不可计算 · 0/${row.events} 条路径`
 const drawdownLabel = row => !row.closeDrawdownStatus ? '旧结果未保存' : row.closeDrawdownStatus === 'PENDING' ? '未到期' : row.closeDrawdownStatus === 'MISSING_PRICE' ? '路径缺价格' : `${formatPct(row.maxCloseDrawdownPct)}${row.drawdownTroughDay ? `（${row.drawdownPeakDay} → ${row.drawdownTroughDay}）` : '（未出现回撤）'}`
+const dayPct = (day, key) => day.pending === day.events ? '未到期' : formatPct(day[key])
 onBeforeUnmount(() => { sequence++; detailSequence++; clearTimeout(timer) })
 </script>
 
@@ -148,9 +152,17 @@ onBeforeUnmount(() => { sequence++; detailSequence++; clearTimeout(timer) })
       <div class="validation-context"><span>事件 {{ result.start }} — {{ result.end }}</span><span>训练截止 {{ result.split }}</span><span>数据截止 {{ result.asof }}</span><span>最长预测期限隔离 {{ result.embargoSessions }} 个交易日</span></div>
       <p class="footnote">请求 {{ result.signalDaysRequested }} 个事件日；Level‑2 缺档 {{ result.signalDaysMissingFlow.length }} 日；累计事件×期限 {{ result.observationCount?.toLocaleString() ?? '旧结果未记录' }} 条。{{ frozen ? '此结果只使用快照保存时的来源。' : '调整上方日期后，只有重新计算才更新下方结果。' }}</p>
       <p v-if="result.signalDaysMissingFlow.length" class="footnote">缺档日期：{{ result.signalDaysMissingFlow.map(item => item.day).join('、') }}；缺档不跨越形成事件。</p>
-      <div class="validation-filters"><label>样本分段<select v-model="selectedCohort"><option v-for="(name, key) in cohortName" :key="key" :value="key">{{ name }}</option></select></label><label>后续交易日<select v-model.number="selectedHorizon"><option v-for="day in horizons" :key="day" :value="day">后 {{ day }} 日</option></select></label><span>{{ cohortName[selectedCohort] }} · 已观察 {{ counts.observed.toLocaleString() }} 条 · 未到期 {{ counts.pending.toLocaleString() }} 条 · 各类最多 {{ counts.days }} 个事件日</span></div>
-      <div v-if="rows.length" class="table-scroll"><table class="validation-table"><thead><tr><th>事件</th><th>触发数</th><th>已观察／未到期／缺价格</th><th>次日日线门槛</th><th>事件日</th><th>平均收益</th><th>收盘路径回撤中位</th><th>同日基准超额</th><th>按事件日等权超额</th><th>基准平均覆盖</th></tr></thead><tbody><tr v-for="row in rows" :key="row.rule"><td>{{ ruleName[row.rule] || row.rule }}</td><td>{{ row.events.toLocaleString() }}</td><td>{{ row.observed.toLocaleString() }} / {{ row.pending.toLocaleString() }} / {{ row.missingPrice.toLocaleString() }}</td><td>{{ entryCounts(row) }}</td><td>{{ row.signalDays }}</td><td>{{ formatPct(row.meanReturnPct) }}</td><td>{{ drawdownSummary(row) }}</td><td>{{ formatPct(row.meanExcessPct) }}</td><td>{{ formatPct(row.equalDayMeanExcessPct) }}</td><td>{{ row.benchmarkPoolMeanN == null ? '未知' : row.benchmarkPoolMeanN.toFixed(0) + ' 只' }}</td></tr></tbody></table></div>
+      <div class="validation-filters"><label>样本分段<select v-model="selectedCohort"><option v-for="(name, key) in cohortName" :key="key" :value="key">{{ name }}</option></select></label><label>后续交易日<select v-model.number="selectedHorizon"><option v-for="day in horizons" :key="day" :value="day">后 {{ day }} 日</option></select></label><span>{{ cohortName[selectedCohort] }} · 已观察 {{ counts.observed.toLocaleString() }} 条 · 未到期 {{ counts.pending.toLocaleString() }} 条 · 各类最多 {{ counts.days }} 个已观察事件日</span></div>
+      <div v-if="rows.length" class="table-scroll"><table class="validation-table"><thead><tr><th>事件</th><th>触发数</th><th>已观察／未到期／缺价格</th><th>次日日线门槛</th><th>已观察／触发日</th><th>平均收益</th><th>收盘路径回撤中位</th><th>同日基准超额</th><th>按事件日等权超额</th><th>基准平均覆盖</th></tr></thead><tbody><tr v-for="row in rows" :key="row.rule"><td>{{ ruleName[row.rule] || row.rule }}</td><td>{{ row.events.toLocaleString() }}</td><td>{{ row.observed.toLocaleString() }} / {{ row.pending.toLocaleString() }} / {{ row.missingPrice.toLocaleString() }}</td><td>{{ entryCounts(row) }}</td><td>{{ row.signalDays }} / {{ row.triggerDays ?? '旧结果未知' }}</td><td>{{ formatPct(row.meanReturnPct) }}</td><td>{{ drawdownSummary(row) }}</td><td>{{ formatPct(row.meanExcessPct) }}</td><td>{{ formatPct(row.equalDayMeanExcessPct) }}</td><td>{{ row.benchmarkPoolMeanN == null ? '未知' : row.benchmarkPoolMeanN.toFixed(0) + ' 只' }}</td></tr></tbody></table></div>
       <p v-else class="footnote">此分段／期限没有已识别事件；不补零，也不推出无效结论。</p>
+      <details v-if="rows.length" class="validation-event validation-day-breakdown">
+        <summary>逐事件日核对 · {{ cohortName[selectedCohort] }}后 {{ selectedHorizon }} 日</summary>
+        <p class="footnote">每行是一个触发日，同日多股不当作独立交易日；期限重叠也不是独立确认。只读保存的逐日摘要，不从最新数据补旧快照。</p>
+        <label>事件类型 <select :value="chosenRule" @change="selectedRule = $event.target.value"><option v-for="row in rows" :key="row.rule" :value="row.rule">{{ ruleName[row.rule] || row.rule }}</option></select></label>
+        <p v-if="dayBreakdown == null" class="footnote">旧结果未保存逐事件日汇总。</p>
+        <div v-else-if="dayBreakdown.length" class="table-scroll"><table class="validation-table"><thead><tr><th>触发日</th><th>触发数</th><th>已观察／未到期／缺价格</th><th>当日事件平均收益</th><th>同日基准</th><th>当日平均超额</th><th>基准覆盖</th></tr></thead><tbody><tr v-for="day in dayBreakdown" :key="day.day"><th scope="row">{{ day.day }}</th><td>{{ day.events.toLocaleString() }}</td><td>{{ day.observed }} / {{ day.pending }} / {{ day.missingPrice }}</td><td>{{ dayPct(day, 'meanReturnPct') }}</td><td>{{ dayPct(day, 'benchmarkPct') }}</td><td>{{ dayPct(day, 'meanExcessPct') }}</td><td>{{ day.benchmarkN == null ? '未到期' : day.benchmarkN + ' 只' }}</td></tr></tbody></table></div>
+        <p v-else class="footnote">所选事件类型没有触发日。</p>
+      </details>
       <div class="validation-stock">
         <h3>个股事件与后续结果</h3>
         <p class="footnote">仅查询所选研究窗口中的触发事件；不把后续涨跌写回触发日判断。快照只保留实际打开过的个股。</p>

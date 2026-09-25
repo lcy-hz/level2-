@@ -101,9 +101,13 @@ def study(flows, prices, days, start, end, asof, split, horizons=(1, 3, 5),
 
     observations, missing_sources = [], []
     bars = bars or {}
+    def daily_group():
+        return {'events': 0, 'observed': 0, 'pending': 0, 'missingPrice': 0,
+                'returns': [], 'excessSum': 0.0, 'excessN': 0,
+                'benchmarkPct': None, 'benchmarkN': None}
     aggregates = defaultdict(lambda: {'events': 0, 'observed': 0, 'pending': 0, 'missingPrice': 0,
                                       'returns': [], 'positive': 0, 'benchmarkSum': 0,
-                                      'excessSum': 0, 'excessN': 0, 'daily': defaultdict(lambda: [0, 0]),
+                                      'excessSum': 0, 'excessN': 0, 'daily': defaultdict(daily_group),
                                       'signalDays': set(), 'entryGates': defaultdict(int),
                                       'closeDrawdowns': []})
     observation_count = 0
@@ -162,33 +166,49 @@ def study(flows, prices, days, start, end, asof, split, horizons=(1, 3, 5),
                 group = aggregates[(cohort, rule, horizon)]
                 group['events'] += 1
                 group['entryGates'][gate] += 1
+                daily = group['daily'][day]
+                daily['events'] += 1
+                daily['benchmarkPct'] = benchmark
+                daily['benchmarkN'] = len(benchmark_returns) if maturity else None
                 if close_drawdown is not None:
                     group['closeDrawdowns'].append(close_drawdown)
                 if status == 'PENDING':
                     group['pending'] += 1
+                    daily['pending'] += 1
                 elif status == 'MISSING_PRICE':
                     group['missingPrice'] += 1
+                    daily['missingPrice'] += 1
                 else:
                     group['observed'] += 1
+                    daily['observed'] += 1
                     group['returns'].append(outcome)
+                    daily['returns'].append(outcome)
                     group['positive'] += outcome > 0
                     group['benchmarkSum'] += len(benchmark_returns)
                     group['signalDays'].add(day)
                     if item['excessPct'] is not None:
                         group['excessSum'] += item['excessPct']
                         group['excessN'] += 1
-                        group['daily'][day][0] += item['excessPct']
-                        group['daily'][day][1] += 1
+                        daily['excessSum'] += item['excessPct']
+                        daily['excessN'] += 1
 
     summary = []
     for (cohort, rule, horizon), group in sorted(aggregates.items()):
         values = group['returns']
         n = group['observed']
+        daily_rows = [{'day': day, 'events': daily['events'], 'observed': daily['observed'],
+                       'pending': daily['pending'], 'missingPrice': daily['missingPrice'],
+                       'meanReturnPct': (statistics.mean(daily['returns']) if daily['returns'] else None),
+                       'benchmarkPct': daily['benchmarkPct'], 'benchmarkN': daily['benchmarkN'],
+                       'meanExcessPct': (daily['excessSum'] / daily['excessN'] if daily['excessN'] else None)}
+                      for day, daily in sorted(group['daily'].items())]
         summary.append({'cohort': cohort, 'rule': rule, 'horizon': horizon,
                         'events': group['events'], 'observed': n,
                         'pending': group['pending'], 'missingPrice': group['missingPrice'],
                         'signalDays': len(group['signalDays']),
+                        'triggerDays': len(daily_rows),
                         'entryGateCounts': dict(sorted(group['entryGates'].items())),
+                        'signalDayBreakdown': daily_rows,
                         'closeDrawdownObserved': len(group['closeDrawdowns']),
                         'medianMaxCloseDrawdownPct': (statistics.median(group['closeDrawdowns'])
                                                       if group['closeDrawdowns'] else None),
@@ -197,7 +217,9 @@ def study(flows, prices, days, start, end, asof, split, horizons=(1, 3, 5),
                         'medianReturnPct': statistics.median(values) if values else None,
                         'positiveShare': group['positive'] / n if n else None,
                         'meanExcessPct': group['excessSum'] / group['excessN'] if group['excessN'] else None,
-                        'equalDayMeanExcessPct': statistics.mean(s / count for s, count in group['daily'].values()) if group['daily'] else None})
+                        'equalDayMeanExcessPct': (statistics.mean(row['meanExcessPct'] for row in daily_rows
+                                                                 if row['meanExcessPct'] is not None)
+                                                  if any(row['meanExcessPct'] is not None for row in daily_rows) else None)})
     return {'method': 'DAILY_EVENT_CLOSE_TO_CLOSE_DESCRIPTIVE_1',
             'start': start, 'end': end, 'asof': asof, 'split': split,
             'horizons': list(horizons), 'embargoSessions': max_horizon,

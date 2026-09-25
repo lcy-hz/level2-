@@ -220,8 +220,10 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_snapshot_freezes_verified_validation_without_live_backfill(self):
         study={'start':'20260901','end':'20260907','asof':'20260907','split':'20260905',
-               'summary':[{'rule':'SELL_EASING','observed':12,'entryGateCounts':{'PRICE_REFERENCE_ONLY':10,'ONE_PRICE_SESSION':2},
-                           'closeDrawdownObserved':11,'medianMaxCloseDrawdownPct':-2.5}],
+               'summary':[{'rule':'SELL_EASING','observed':12,'triggerDays':1,'entryGateCounts':{'PRICE_REFERENCE_ONLY':10,'ONE_PRICE_SESSION':2},
+                           'closeDrawdownObserved':11,'medianMaxCloseDrawdownPct':-2.5,
+                           'signalDayBreakdown':[{'day':'20260907','events':12,'observed':12,'pending':0,
+                                                  'missingPrice':0,'meanExcessPct':1.2}]}],
                'sourceIdentity':'fixture'}
         detail={'code':'000001.SZ','observations':[{'day':'20260907','horizon':1,'returnPct':None,
                                                    'status':'PENDING','entryDay':'20260908','entryGate':'PENDING',
@@ -235,6 +237,7 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(frozen['validationDetails']['000001.SZ'],detail)
         self.assertEqual(frozen['validation']['summary'][0]['entryGateCounts']['ONE_PRICE_SESSION'],2)
         self.assertEqual(frozen['validation']['summary'][0]['closeDrawdownObserved'],11)
+        self.assertEqual(frozen['validation']['summary'][0]['signalDayBreakdown'][0]['day'],'20260907')
         self.assertEqual(frozen['patternUI']['tab'],'validation')
         with self.assertRaises(ValueError):
             self.w.save({'day':'20260907','data':self.data,'validationReceipt':'b'*32})
