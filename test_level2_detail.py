@@ -203,6 +203,17 @@ class DetailTests(unittest.TestCase):
         self.assertNotEqual(before, source_identity(self.day, self.root))
         self.assertEqual(service.status('600000.SH')['status'], 'idle')
 
+    def test_cache_must_still_match_report_stock_and_day(self):
+        service=Service(self.report,self.root,self.root/'cache')
+        service.start('600000.SH')
+        service.pool.shutdown(wait=True)
+        self.assertEqual(service.status('600000.SH')['status'],'done')
+        path=service.path('600000.SH')
+        original=json.loads(path.read_text())
+        for change in ({'code':'000001.SZ'},{'day':'20260921'},{'amount':9999},{'net':0}):
+            path.write_text(json.dumps({**original,**change}))
+            self.assertEqual(service.status('600000.SH')['status'],'idle')
+
     def test_failed_job_is_retryable(self):
         def fail(*args):
             raise ValueError('测试失败')

@@ -38,6 +38,9 @@ class WorkspaceTests(unittest.TestCase):
         self.report.write_text(json.dumps(self.data))
         self.service=SimpleNamespace(root=self.root,day='20260907',report=self.data,cards={'000001.SZ':self.data['cards'][0]})
         self.w=Workspace(self.service,self.base,self.calendar)
+        sources=self.w.sources('20260907')
+        self.provenance=self.report.with_suffix('.provenance.json')
+        self.provenance.write_text(json.dumps({'sources':sources,'sourceDigest':digest(sources)}))
 
     def tearDown(self):
         self.w.pool.shutdown();self.w.state.pool.shutdown();self.temp.cleanup()
@@ -70,8 +73,74 @@ class WorkspaceTests(unittest.TestCase):
                 self.assertIs(first,bare.get_minute_service('20260907'))
             self.assertEqual((first.day,second.day),('20260907','20260906'))
             self.assertIsNot(first,second)
+            self.assertFalse(first.verify_report_totals)
         finally:
             bare.close()
+
+    def test_report_gate_rejects_missing_lineage_wrong_day_and_changed_content(self):
+        self.assertEqual(self.w.status('20260907')['status'],'ready')
+        self.assertIn('未记录内容哈希',self.w.status('20260907')['message'])
+        original=json.loads(self.provenance.read_text())
+        self.provenance.unlink()
+        self.assertEqual(self.w.status('20260907')['status'],'stale')
+        self.provenance.write_text(json.dumps(original))
+        self.report.write_text(json.dumps({'markets':[{'day':'20260906'}],'cards':self.data['cards']}))
+        self.assertEqual(self.w.status('20260907')['status'],'stale')
+        self.report.write_text(json.dumps(self.data))
+        original['reportSha256']=hashlib.sha256(self.report.read_bytes()).hexdigest()
+        self.provenance.write_text(json.dumps(original))
+        self.assertEqual(self.w.status('20260907')['status'],'ready')
+        self.report.write_text(json.dumps({**self.data,'cards':[{'code':'000001.SZ','close':99}]}))
+        self.assertIn('内容与发布凭据不一致',self.w.status('20260907')['message'])
+
+    def test_report_publication_records_content_hash(self):
+        bare=Workspace(base=self.base,calendar=self.calendar,root=self.root)
+        try:
+            def fake_process(command,**_):
+                output=Path(command[command.index('--output')+1])
+                output.write_text(json.dumps(self.data))
+                return SimpleNamespace(stdout=[],wait=lambda:0)
+            with patch('level2_workspace.subprocess.Popen',side_effect=fake_process):
+                bare._build('20260907',bare.window('20260907'))
+            self.assertEqual(bare.status('20260907')['status'],'ready')
+            meta=json.loads(self.provenance.read_text())
+            self.assertEqual(meta['reportSha256'],hashlib.sha256(self.report.read_bytes()).hexdigest())
+            self.assertFalse(self.provenance.with_suffix('.building.json').exists())
+            self.assertEqual(bare.get_service('20260907').day,'20260907')
+        finally:
+            bare.close()
+
+    def test_interrupted_report_swap_is_not_published(self):
+        bare=Workspace(base=self.base,calendar=self.calendar,root=self.root)
+        try:
+            changed={**self.data,'cards':[{'code':'000001.SZ','close':99}]}
+            def fake_process(command,**_):
+                Path(command[command.index('--output')+1]).write_text(json.dumps(changed))
+                return SimpleNamespace(stdout=[],wait=lambda:0)
+            original_replace=Path.replace
+            def interrupt_report_swap(path,target):
+                if path.name=='report.building.json':raise OSError('simulated interruption')
+                return original_replace(path,target)
+            with patch('level2_workspace.subprocess.Popen',side_effect=fake_process), \
+                 patch.object(Path,'replace',interrupt_report_swap):
+                bare._build('20260907',bare.window('20260907'))
+            self.assertEqual(bare.jobs['20260907']['status'],'error')
+            restarted=Workspace(base=self.base,calendar=self.calendar,root=self.root)
+            try:self.assertEqual(restarted.status('20260907')['status'],'stale')
+            finally:restarted.close()
+        finally:bare.close()
+
+    def test_legacy_report_change_reloads_date_service(self):
+        bare=Workspace(base=self.base,calendar=self.calendar,root=self.root)
+        try:
+            first=bare.get_service('20260907')
+            changed={**self.data,'cards':[{'code':'000001.SZ','close':99}]}
+            self.report.write_text(json.dumps(changed))
+            self.assertEqual(bare.status('20260907')['status'],'ready')
+            second=bare.get_service('20260907')
+            self.assertIsNot(first,second)
+            self.assertEqual(second.report['cards'][0]['close'],99)
+        finally:bare.close()
 
     def test_calendar_missing_day_is_not_shortened(self):
         self.calendar.write_text(self.calendar.read_text().replace('SSE,20260904,1\n',''))
@@ -172,7 +241,7 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(document['report'],self.data)
         self.assertEqual(document['mode'],'live')
         self.assertTrue(document['researchOnly'])
-        self.assertEqual(document['provenance']['status'],'UNKNOWN_GENERATION_LINEAGE')
+        self.assertEqual(document['provenance']['sourceDigest'],json.loads(self.provenance.read_text())['sourceDigest'])
         with patch.object(self.w,'status',return_value={'status':'stale'}):
             with self.assertRaisesRegex(ValueError,'未就绪'):
                 self.w.report_document('20260907')

@@ -182,23 +182,44 @@ class Workspace:
             if job and job['status'] in ('running','queued','error'):return dict(job)
         if path.is_file():
             meta=path.with_suffix('.provenance.json')
-            from level2_paths import PATHS
-            if not meta.is_file() and (PATHS['level2']!=Path('/Volumes/Sn850X_4T/data/level2').resolve() or PATHS['stock_basic']!=Path('/Users/m4pro/Documents/claude/quant-platform/data/sync/stock/basic/stock_basic/stock_basic.csv').resolve()):
-                return {'status':'stale','message':'数据源已切换，旧报告来源不能确认，请重新计算'}
-            if meta.is_file():
-                try:
-                    if not report_sources_match(json.loads(meta.read_text()),self.sources(day)):
-                        return {'status':'stale','message':'源文件已变化，报告待重新计算'}
-                except (ValueError,KeyError):return {'status':'stale','message':'报告指纹无效'}
-            return {'status':'ready','message':'报告可查看'+('（旧报告未记录生成时源指纹）' if not meta.is_file() else '')}
+            if not meta.is_file():
+                return {'status':'stale','message':'报告缺少来源凭据，不能作为实时报告；请重新计算'}
+            try:
+                from level2_detail_service import read_report
+                window=self.window(day)
+                if len(window)!=7 or window[-1]!=day or any(self.gate(d) for d in window):
+                    return {'status':'stale','message':'最近7交易日正式来源不完整，请核对后重新计算'}
+                recorded=json.loads(meta.read_text())
+                if not report_sources_match(recorded,self.sources(day)):
+                    return {'status':'stale','message':'源文件已变化，报告待重新计算'}
+                report=read_report(path,day)
+                if not report['cards']:
+                    return {'status':'stale','message':'报告股票覆盖为空，请重新计算'}
+                checksum=recorded.get('reportSha256')
+                if checksum is not None and checksum!=hashlib.sha256(path.read_bytes()).hexdigest():
+                    return {'status':'stale','message':'报告内容与发布凭据不一致，请重新计算'}
+            except (OSError,ValueError,KeyError,TypeError):
+                return {'status':'stale','message':'报告或来源凭据无效，请重新计算'}
+            return {'status':'ready','message':'报告可查看'+('（旧报告未记录内容哈希；仅核验来源与结构）' if checksum is None else '')}
         return {'status':'missing','message':'报告待计算'}
 
     def get_service(self,day):
         from level2_detail_service import Service,read_report
         if self.status(day)['status']!='ready':raise ValueError('所选日期报告未就绪，请先计算')
+        path=self.report_path(day)
+        stamp=fingerprint(path)
         with self.lock:
-            if day not in self.services:
-                self.services[day]=Service(read_report(self.report_path(day)),root=self.root)
+            previous=self.services.get(day)
+            if previous is not None and (not hasattr(previous,'_report_stamp') or previous._report_stamp==stamp):
+                return previous
+            report=read_report(path,day)
+            if stamp!=fingerprint(path):raise ValueError('读取期间报告发生变化，请重试')
+            if previous is not None:previous.pool.shutdown(wait=False,cancel_futures=True)
+            old_minute=self.minute_services.pop(day,None)
+            if old_minute:old_minute.pool.shutdown(wait=False,cancel_futures=True)
+            current=Service(report,root=self.root)
+            current._report_stamp=stamp
+            self.services[day]=current
             return self.services[day]
 
     def get_minute_service(self,day):
@@ -208,7 +229,8 @@ class Workspace:
         with self.lock:
             if day not in self.minute_services:
                 self.minute_services[day]=Service(report_service.report,root=self.root,
-                    cache=self.base/'.level2_minute_cache',calculator=calculate_intraday,identity=minute_identity)
+                    cache=self.base/'.level2_minute_cache',calculator=calculate_intraday,identity=minute_identity,
+                    verify_report_totals=False)
             return self.minute_services[day]
 
     def close(self):
@@ -252,11 +274,18 @@ class Workspace:
                     with self.lock:self.jobs[day]={'status':'running','message':'正在汇总 '+line.strip().split()[-1]+'；随后计算候选详情'}
             if process.wait()!=0:raise ValueError('\n'.join(tail)[-1800:])
             from level2_detail_service import read_report
-            data=read_report(tmp)
+            data=read_report(tmp,day)
             if data['markets'][-1]['day']!=day or not data['cards']:raise ValueError('生成结果日期或覆盖无效')
             if digest(initial)!=digest(self.sources(day)):raise ValueError('计算期间源数据变化，未发布结果')
+            meta=target.with_suffix('.provenance.json')
+            meta_tmp=meta.with_suffix('.building.json')
+            meta_tmp.write_text(encoded({'sourceDigest':digest(initial),'sources':initial,
+                'reportSha256':hashlib.sha256(tmp.read_bytes()).hexdigest(),
+                'generatedAt':datetime.now(timezone.utc).isoformat()}))
+            # Publish the new checksum first: an interrupted swap cannot make a
+            # new report look ready under an old, checksum-free provenance file.
+            meta_tmp.replace(meta)
             tmp.replace(target)
-            target.with_suffix('.provenance.json').write_text(encoded({'sourceDigest':digest(initial),'sources':initial,'generatedAt':datetime.now(timezone.utc).isoformat()}))
             with self.lock:
                 previous=self.services.pop(day,None)
                 old_minute=self.minute_services.pop(day,None)

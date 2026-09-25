@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Lock
 import json
+import math
 import re
 
 from level2_detail_research import calculate, source_identity
@@ -13,7 +14,7 @@ SOURCE = PATHS['level2']
 CACHE = BASE / '.level2_detail_cache'
 
 
-def read_report(path):
+def read_report(path, expected_day=None):
     if Path(path).suffix != '.json':raise ValueError('正式报告必须是 JSON')
     data=json.loads(Path(path).read_text(encoding='utf-8'))
     if (not isinstance(data,dict) or not isinstance(data.get('markets'),list) or not data['markets']
@@ -21,16 +22,20 @@ def read_report(path):
             or not re.fullmatch(r'\d{8}',str(data['markets'][-1].get('day','')))
             or not isinstance(data.get('cards'),list)):
         raise ValueError('报告 JSON 结构无效')
+    if expected_day is not None and data['markets'][-1]['day'] != expected_day:
+        raise ValueError('报告证据日与文件日期不一致')
     return data
 
 
 class Service:
-    def __init__(self, report, root=SOURCE, cache=CACHE, calculator=calculate, identity=source_identity):
+    def __init__(self, report, root=SOURCE, cache=CACHE, calculator=calculate, identity=source_identity,
+                 verify_report_totals=True):
         self.report = report
         self.day = self.report['markets'][-1]['day']
         self.cards = {c['code']: c for c in self.report['cards']}
         self.root, self.cache, self.calculator = root, cache, calculator
         self.identity = identity
+        self.verify_report_totals = verify_report_totals
         self.jobs, self.lock = {}, Lock()
         self.pool = ThreadPoolExecutor(max_workers=1)
 
@@ -40,6 +45,22 @@ class Service:
 
     def path(self, code):
         return self.cache / self.day / f'{code}.json'
+
+    def matches_report(self, code, result):
+        if not isinstance(result,dict) or result.get('code') != code or result.get('day') != self.day:
+            return False
+        if not self.verify_report_totals:
+            return True
+        expected=self.cards[code]
+        for field in ('amount','net'):
+            actual, target=result.get(field),expected.get(field)
+            if actual is None or target is None:
+                if actual is not None or target is not None:return False
+            elif (type(actual) not in (int,float) or type(target) not in (int,float)
+                  or not math.isfinite(actual) or not math.isfinite(target)
+                  or abs(actual-target)>max(2,abs(target)*1e-9)):
+                return False
+        return True
 
     def status(self, code):
         self.validate(code)
@@ -51,7 +72,8 @@ class Service:
         if path.is_file():
             try:
                 result = json.loads(path.read_text())
-                if result['sourceIdentity'] == self.identity(self.day, self.root):
+                if (isinstance(result,dict) and result['sourceIdentity'] == self.identity(self.day, self.root)
+                        and self.matches_report(code,result)):
                     return {'status': 'done', 'message': '已读取本地计算结果', 'result': result}
             except (OSError, ValueError, KeyError):
                 pass
