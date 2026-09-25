@@ -9,6 +9,7 @@ const sortable = {
   improve: stock => stock.expected > 1 ? stock.improve : null,
   amount: stock => stock.amount,
   price: stock => stock.priceReturn,
+  drawdown: stock => stock.maxCloseDrawdown,
 }
 
 export function filterContinuousStocks(stocks, names = {}, options = {}) {

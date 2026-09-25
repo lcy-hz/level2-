@@ -70,6 +70,17 @@ def compute(rows, days, day, window):
     baseline=rows.get(days[baseidx]) if baseidx>=0 else None
     prices=[baseline,*series]
     price_ok=len(dates)==window and all(r and r.get('adjusted',0)>0 for r in prices)
+    drawdown=None;drawdown_peak=None;drawdown_trough=None
+    if price_ok:
+        peak=prices[0]['adjusted'];peak_day=days[baseidx]
+        drawdown=0.0
+        for d,r in zip(dates,series):
+            value=r['adjusted']
+            if value>peak:
+                peak=value;peak_day=d
+            current=100*(value/peak-1)
+            if current<drawdown:
+                drawdown=current;drawdown_peak=peak_day;drawdown_trough=d
     history=[]
     for index,(d,r) in enumerate(zip(dates,series)):
         earlier,now=prices[index:index+2]
@@ -86,6 +97,7 @@ def compute(rows, days, day, window):
             'status':'AVAILABLE' if full else 'INCOMPLETE','amount':latest.get('amount') if latest else None,
             'amountChange':change_amount,'meanAmount':sum(r['amount'] for r in amounts)/window if complete_amount else None,
             'priceReturn':100*(prices[-1]['adjusted']/prices[0]['adjusted']-1) if price_ok else None,
+            'maxCloseDrawdown':drawdown,'drawdownPeakDay':drawdown_peak,'drawdownTroughDay':drawdown_trough,
             'start':dates[0] if dates else None,'end':day,
             'history':history,'events':observe(history)}
 

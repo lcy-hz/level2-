@@ -39,3 +39,10 @@ test('one-day stock delta may compare with a valid prior day outside the window'
     { code: 'C', expected: 1, delta: -0.2, viewDelta: null }]
   assert.deepEqual(codes(filterContinuousStocks(rows, {}, { sort: 'delta', direction: 'desc' })), ['A', 'C', 'B'])
 })
+
+test('close drawdown sorts zero as observed and missing values last', () => {
+  const rows = [{ code: 'A', maxCloseDrawdown: 0 }, { code: 'B', maxCloseDrawdown: -12 },
+    { code: 'C', maxCloseDrawdown: null }, { code: 'D', maxCloseDrawdown: -3 }]
+  assert.deepEqual(codes(filterContinuousStocks(rows, {}, { sort: 'drawdown', direction: 'asc' })), ['B', 'D', 'A', 'C'])
+  assert.deepEqual(codes(filterContinuousStocks(rows, {}, { sort: 'drawdown', direction: 'desc' })), ['A', 'D', 'B', 'C'])
+})

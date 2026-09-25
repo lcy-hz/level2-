@@ -53,10 +53,25 @@ class StateTests(unittest.TestCase):
         values[DAYS[-1]]['adjusted']=100
         observed=compute(values,DAYS,DAYS[-1],3)
         self.assertEqual([round(r['priceDailyReturn'],5) for r in observed['history']],[10,-9.09091,0])
+        self.assertAlmostEqual(observed['maxCloseDrawdown'],-100/11)
+        self.assertEqual((observed['drawdownPeakDay'],observed['drawdownTroughDay']),(DAYS[-3],DAYS[-2]))
         del values[DAYS[-2]]['adjusted']
         incomplete=compute(values,DAYS,DAYS[-1],3)
         self.assertEqual([r['priceDailyReturn'] is None for r in incomplete['history']],[False,True,True])
         self.assertIsNone(incomplete['priceReturn'])
+        self.assertIsNone(incomplete['maxCloseDrawdown'])
+
+    def test_close_drawdown_uses_baseline_and_never_future(self):
+        values={DAYS[-4]:{'adjusted':100},DAYS[-3]:{'adjusted':90},
+                DAYS[-2]:{'adjusted':95},DAYS[-1]:{'adjusted':120}}
+        state=compute(values,DAYS,DAYS[-1],3)
+        self.assertAlmostEqual(state['maxCloseDrawdown'],-10)
+        self.assertEqual((state['drawdownPeakDay'],state['drawdownTroughDay']),(DAYS[-4],DAYS[-3]))
+        values['20260923']={'adjusted':10}
+        self.assertEqual(state,compute(values,DAYS+['20260923'],DAYS[-1],3))
+        rising=compute({DAYS[-2]:{'adjusted':100},DAYS[-1]:{'adjusted':110}},DAYS,DAYS[-1],1)
+        self.assertEqual(rising['maxCloseDrawdown'],0)
+        self.assertIsNone(rising['drawdownPeakDay'])
 
     def test_snapshot_receipts_reject_changed_source_or_wrong_window(self):
         import json
