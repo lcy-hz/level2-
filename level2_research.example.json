@@ -1,6 +1,11 @@
 {
   "history_roots": ["/absolute/path/history-data/level2"],
   "trade_calendar": "/absolute/path/trade_cal.csv",
+  "benchmark": {
+    "code": "000300.SH",
+    "name": "沪深300价格指数",
+    "path": "/absolute/path/000300_SH_index_daily.csv"
+  },
   "default_window": 5,
   "max_window": 60
 }

@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 from types import SimpleNamespace
 import duckdb
-from level2_state import compute, StateService, calendar
+from level2_state import compute, benchmark_evidence, StateService, calendar
 
 DAYS=['20260916','20260917','20260918','20260921','20260922']
 def row(ratio,amount=100):return {'ratio':ratio,'amount':amount,'net':amount*ratio/100,'unknown':0,'adjusted':100}
@@ -72,6 +72,51 @@ class StateTests(unittest.TestCase):
         rising=compute({DAYS[-2]:{'adjusted':100},DAYS[-1]:{'adjusted':110}},DAYS,DAYS[-1],1)
         self.assertEqual(rising['maxCloseDrawdown'],0)
         self.assertIsNone(rising['drawdownPeakDay'])
+
+    def test_benchmark_requires_every_calendar_day_and_ignores_future(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path=Path(temp)/'index.csv'
+            config={'code':'000300.SH','name':'沪深300价格指数','path':str(path)}
+            self.assertEqual(benchmark_evidence(config,DAYS[-4:],3)['status'],'MISSING_FILE')
+            self.assertEqual(benchmark_evidence(None,DAYS[-4:],3)['status'],'NOT_CONFIGURED')
+            path.write_text('ts_code,trade_date,close\n000300.SH,20260917,100\n'
+                            '000300.SH,20260918,110\n000300.SH,20260922,120\n'
+                            '000300.SH,20260923,999\n')
+            dates=DAYS[-4:]
+            missing=benchmark_evidence(config,dates,3)
+            self.assertEqual(missing['status'],'INCOMPLETE_PRICES')
+            self.assertEqual(missing['missing'],[DAYS[-2]])
+            self.assertIsNone(missing['returnPct'])
+            path.write_text(path.read_text()+'000300.SH,20260921,115\n')
+            ready=benchmark_evidence(config,dates,3)
+            self.assertEqual(ready['status'],'AVAILABLE')
+            self.assertAlmostEqual(ready['returnPct'],20)
+            self.assertEqual(ready['baselineDay'],DAYS[-4])
+            self.assertEqual(benchmark_evidence(config,dates,4)['status'],'INCOMPLETE_WINDOW')
+            path.write_text(path.read_text()+'000300.SH,20260921,116\n')
+            duplicate=benchmark_evidence(config,dates,3)
+            self.assertEqual(duplicate['status'],'DUPLICATE_DATE')
+            self.assertEqual(duplicate['missing'],[DAYS[-2]])
+            self.assertIsNone(duplicate['returnPct'])
+
+    def test_relative_return_is_difference_in_percentage_points(self):
+        rows={DAYS[-2]:{'adjusted':100},DAYS[-1]:{'adjusted':110}}
+        state=compute(rows,DAYS,DAYS[-1],1,benchmark_return=2)
+        self.assertAlmostEqual(state['relativeReturn'],8)
+        self.assertIsNone(compute(rows,DAYS,DAYS[-1],1)['relativeReturn'])
+        self.assertIsNone(compute({DAYS[-1]:{'adjusted':110}},DAYS,DAYS[-1],1,benchmark_return=2)['relativeReturn'])
+
+    def test_benchmark_file_is_part_of_source_identity(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base=Path(temp);index=base/'index.csv';index.write_text('close\n100\n')
+            service=StateService(SimpleNamespace(base=base,root=base))
+            cfg={'trade_calendar':str(base/'calendar.csv'),'history_roots':[],
+                 'benchmark':{'code':'000300.SH','name':'沪深300价格指数','path':str(index)}}
+            with patch.object(service,'validate',return_value=DAYS),patch('level2_state.settings',return_value=cfg):
+                first=service.identity(DAYS[-1],3)
+                index.write_text('close\n100\n101\n')
+                self.assertNotEqual(first,service.identity(DAYS[-1],3))
+            service.pool.shutdown()
 
     def test_snapshot_receipts_reject_changed_source_or_wrong_window(self):
         import json

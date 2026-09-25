@@ -46,3 +46,10 @@ test('close drawdown sorts zero as observed and missing values last', () => {
   assert.deepEqual(codes(filterContinuousStocks(rows, {}, { sort: 'drawdown', direction: 'asc' })), ['B', 'D', 'A', 'C'])
   assert.deepEqual(codes(filterContinuousStocks(rows, {}, { sort: 'drawdown', direction: 'desc' })), ['A', 'D', 'B', 'C'])
 })
+
+test('relative benchmark sort retains legitimate zero and unknown last', () => {
+  const rows = [{ code: 'A', relativeReturn: 0 }, { code: 'B', relativeReturn: -2 },
+    { code: 'C', relativeReturn: null }, { code: 'D', relativeReturn: 3 }]
+  assert.deepEqual(codes(filterContinuousStocks(rows, {}, { sort: 'relative', direction: 'asc' })), ['B', 'A', 'D', 'C'])
+  assert.deepEqual(codes(filterContinuousStocks(rows, {}, { sort: 'relative', direction: 'desc' })), ['D', 'A', 'B', 'C'])
+})

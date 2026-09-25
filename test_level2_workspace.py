@@ -116,9 +116,11 @@ class WorkspaceTests(unittest.TestCase):
         model=Path(__file__).with_name('level2_state_view.js')
         (self.base/model.name).write_text(model.read_text())
         states={'1':{'day':'20260907','window':1,
+                     'benchmark':{'status':'AVAILABLE','code':'000300.SH','name':'沪深300价格指数',
+                                  'returnPct':1,'source':'/test/index.csv'},
                      'sources':[{'day':'20260907','status':'NATIVE','source':'/test/deal_20260907.parquet',
                                  'priceStatus':'FILE_PRESENT','priceSource':'/test/20260907_stk_factor_pro.csv'}],
-                     'states':{'000001.SZ':{'maxCloseDrawdown':-5,'drawdownPeakDay':'20260904','drawdownTroughDay':'20260907',
+                     'states':{'000001.SZ':{'maxCloseDrawdown':-5,'drawdownPeakDay':'20260904','drawdownTroughDay':'20260907','relativeReturn':1,
                                             'history':[{'day':'20260907','amount':100,'net':10,'ratio':10,'unknown':0,'priceDailyReturn':2}]}}}}
         with patch.object(self.w.state,'frozen',return_value=states):
             result=self.w.save({'day':'20260907','data':self.data,'stateWindow':1})
@@ -131,6 +133,8 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(bundle['stateViews']['1']['priceState']['latestUpShare'],100)
         self.assertEqual(bundle['stateViews']['1']['trajectory'][0]['priceSourceFile'],'/test/20260907_stk_factor_pro.csv')
         self.assertEqual(bundle['stateViews']['1']['stocks'][0]['maxCloseDrawdown'],-5)
+        self.assertEqual(bundle['stateViews']['1']['stocks'][0]['relativeReturn'],1)
+        self.assertEqual(bundle['stateViews']['1']['benchmark']['returnPct'],1)
         self.assertIn(b'stateViews',self.w.frozen_page(result['id']))
         self.assertEqual(self.w.snapshot_document(result['id'])['stateViews']['1']['trajectory'][0]['ratio'],10)
 

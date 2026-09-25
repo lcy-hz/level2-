@@ -10,6 +10,7 @@ const sortable = {
   amount: stock => stock.amount,
   price: stock => stock.priceReturn,
   drawdown: stock => stock.maxCloseDrawdown,
+  relative: stock => stock.relativeReturn,
 }
 
 export function filterContinuousStocks(stocks, names = {}, options = {}) {

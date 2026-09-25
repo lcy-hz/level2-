@@ -76,6 +76,8 @@ class StateViewTests(unittest.TestCase):
 
     def test_matches_legacy_presentation_model_on_contract_fixture(self):
         result={'day':'20260922','window':2,'eventMethod':'日级事件口径',
+                'benchmark':{'status':'AVAILABLE','code':'000300.SH','name':'沪深300价格指数',
+                             'returnPct':2,'source':'/tmp/index.csv'},
                 'sources':[{'day':'20260921','status':'LEGACY_CALIBRATED_ROW_GUARD','source':'/tmp/a.parquet','priceStatus':'FILE_PRESENT','priceSource':'/tmp/a.csv'},
                            {'day':'20260922','status':'NATIVE','source':'/tmp/b.parquet','priceStatus':'FILE_PRESENT','priceSource':'/tmp/b.csv'}], 'states':{
             'A':{'history':[dict(row('20260921',100,-10),priceDailyReturn=2),dict(row('20260922',100,10),priceDailyReturn=-1)]},
@@ -87,6 +89,7 @@ class StateViewTests(unittest.TestCase):
         old=json.loads(output.stdout);new=derive(result)
         self.assertEqual(new['counts'],old['counts'])
         self.assertEqual(new['eventMethod'],old['eventMethod'])
+        self.assertEqual(new['benchmark'],old['benchmark'])
         self.assertEqual(new['common'],old['common'])
         self.assertEqual(new['priceCommon'],old['priceCommon'])
         self.assertEqual(new['priceState'],old['priceState'])

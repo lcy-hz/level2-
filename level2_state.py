@@ -26,15 +26,59 @@ def stamp(p):
 
 def settings():
     from level2_paths import PATHS
-    defaults={'history_roots':[], 'trade_calendar':str(PATHS['stock_basic'].parent.parent/'trade_cal'/'trade_cal.csv'),'default_window':5,'max_window':60}
+    defaults={'history_roots':[], 'trade_calendar':str(PATHS['stock_basic'].parent.parent/'trade_cal'/'trade_cal.csv'),'default_window':5,'max_window':60,'benchmark':None}
     if CONFIG.exists():defaults.update(json.loads(CONFIG.read_text()))
     for p in [defaults['trade_calendar'],*defaults['history_roots']]:
         if not isinstance(p,str) or not Path(p).is_absolute():raise ValueError('研究数据路径必须为绝对路径')
     if type(defaults['max_window']) is not int or not 1<=defaults['max_window']<=250:raise ValueError('max_window 必须为1至250的整数')
     if type(defaults['default_window']) is not int or not 1<=defaults['default_window']<=defaults['max_window']:raise ValueError('default_window 必须在最大窗口范围内')
+    benchmark=defaults['benchmark']
+    if benchmark is not None:
+        if not isinstance(benchmark,dict) or set(benchmark)!={'code','name','path'}:
+            raise ValueError('benchmark 需要 code、name、path 三个字段')
+        if not isinstance(benchmark['code'],str) or not re.fullmatch(r'\d{6}\.(SH|SZ)',benchmark['code']):
+            raise ValueError('benchmark.code 必须为交易所指数代码')
+        if not isinstance(benchmark['name'],str) or not benchmark['name'].strip() or len(benchmark['name'])>80:
+            raise ValueError('benchmark.name 无效')
+        if not isinstance(benchmark['path'],str) or not Path(benchmark['path']).is_absolute() or Path(benchmark['path']).suffix.lower()!='.csv':
+            raise ValueError('benchmark.path 必须是绝对 CSV 路径')
     return defaults
 
-def compute(rows, days, day, window):
+def benchmark_evidence(config,dates,window):
+    """Price-index close comparison, never filled from a neighboring session."""
+    method='价格指数收盘点位比值；不含分红再投资；不同规模股票仅作描述性比较'
+    if config is None:
+        return {'status':'NOT_CONFIGURED','code':None,'name':None,'source':None,'method':method,
+                'baselineDay':None,'endDay':dates[-1] if dates else None,'missing':list(dates),'returnPct':None}
+    source=Path(config['path'])
+    result={'status':'MISSING_FILE' if not source.is_file() else 'INCOMPLETE_WINDOW' if len(dates)!=window+1 else 'INCOMPLETE_PRICES',
+            'code':config['code'],'name':config['name'],'source':str(source),'method':method,
+            'baselineDay':dates[0] if len(dates)==window+1 else None,
+            'endDay':dates[-1] if dates else None,'missing':list(dates),'returnPct':None}
+    if result['status']!='INCOMPLETE_PRICES':return result
+    required=set(dates);prices={}
+    try:
+        with source.open(newline='') as f:
+            reader=csv.DictReader(f)
+            if not {'ts_code','trade_date','close'}.issubset(reader.fieldnames or []):
+                result['status']='INVALID_SCHEMA';return result
+            for row in reader:
+                d=row['trade_date']
+                if row['ts_code']!=config['code'] or d not in required:continue
+                if d in prices:
+                    result.update(status='DUPLICATE_DATE',missing=[d]);return result
+                try:value=float(row['close'])
+                except (TypeError,ValueError):value=None
+                prices[d]=value if value is not None and math.isfinite(value) and value>0 else None
+    except (OSError,UnicodeError):
+        result['status']='READ_ERROR';return result
+    result['missing']=[d for d in dates if prices.get(d) is None]
+    if not result['missing']:
+        result['status']='AVAILABLE'
+        result['returnPct']=100*(prices[dates[-1]]/prices[dates[0]]-1)
+    return result
+
+def compute(rows, days, day, window, benchmark_return=None):
     """rows keyed by day; extra preceding observation is allowed for delta only."""
     dates=[d for d in days if d<=day][-window:]
     series=[rows.get(d) for d in dates]
@@ -70,6 +114,7 @@ def compute(rows, days, day, window):
     baseline=rows.get(days[baseidx]) if baseidx>=0 else None
     prices=[baseline,*series]
     price_ok=len(dates)==window and all(r and r.get('adjusted',0)>0 for r in prices)
+    price_return=100*(prices[-1]['adjusted']/prices[0]['adjusted']-1) if price_ok else None
     drawdown=None;drawdown_peak=None;drawdown_trough=None
     if price_ok:
         peak=prices[0]['adjusted'];peak_day=days[baseidx]
@@ -96,7 +141,8 @@ def compute(rows, days, day, window):
             'amountValid':len(amounts),'missing':[d for d,r in zip(dates,series) if not usable(r)],
             'status':'AVAILABLE' if full else 'INCOMPLETE','amount':latest.get('amount') if latest else None,
             'amountChange':change_amount,'meanAmount':sum(r['amount'] for r in amounts)/window if complete_amount else None,
-            'priceReturn':100*(prices[-1]['adjusted']/prices[0]['adjusted']-1) if price_ok else None,
+            'priceReturn':price_return,
+            'relativeReturn':price_return-benchmark_return if price_return is not None and benchmark_return is not None else None,
             'maxCloseDrawdown':drawdown,'drawdownPeakDay':drawdown_peak,'drawdownTroughDay':drawdown_trough,
             'start':dates[0] if dates else None,'end':day,
             'history':history,'events':observe(history)}
@@ -110,7 +156,8 @@ class StateService:
     def metadata(self):
         cfg=settings();days,last=calendar(cfg['trade_calendar'])
         return {'days':days,'calendarThrough':last,'defaultWindow':cfg['default_window'],'maxWindow':cfg['max_window'],
-                'historyRoots':cfg['history_roots'],'legacyDirection':'SOURCE_SCOPED_0_BUY_1_SELL_WITH_ID_GUARD'}
+                'historyRoots':cfg['history_roots'],'benchmark':cfg['benchmark'],
+                'legacyDirection':'SOURCE_SCOPED_0_BUY_1_SELL_WITH_ID_GUARD'}
 
     def validate(self,day,window):
         if type(window) is not int or not 1<=window<=settings()['max_window']:raise ValueError('回看天数须为范围内的正整数')
@@ -128,7 +175,9 @@ class StateService:
     def identity(self,day,window):
         from level2_paths import PATHS
         days=self.validate(day,window);dates=[d for d in days if d<=day][-window-1:]
-        items=[stamp(settings()['trade_calendar']),stamp(CONFIG),stamp(Path(__file__)),stamp(BASE/'level2_contract.py'),stamp(BASE/'level2_events.py'),settings()]
+        cfg=settings()
+        items=[stamp(cfg['trade_calendar']),stamp(CONFIG),stamp(Path(__file__)),stamp(BASE/'level2_contract.py'),stamp(BASE/'level2_events.py'),cfg]
+        if cfg['benchmark']:items.append(stamp(cfg['benchmark']['path']))
         for d in dates:
             p=self.source(d)
             items.extend([stamp(p) if p else [d,'missing'],stamp(PATHS['stk_factor_pro']/f'{d}_stk_factor_pro.csv')])
@@ -230,9 +279,11 @@ class StateService:
                 # Price evidence is independent of missing Level-2 flow evidence.
                 for code,value in prices.items():rows.setdefault(code,{})['adjusted']=value
                 allrows[d]=rows;sources.append(source)
-            states={code:compute({d:rows[code] for d,rows in allrows.items() if code in rows},days,day,window) for code in service.cards}
+            benchmark=benchmark_evidence(settings()['benchmark'],dates,window)
+            states={code:compute({d:rows[code] for d,rows in allrows.items() if code in rows},days,day,window,
+                                 benchmark['returnPct']) for code in service.cards}
             if identity!=self.identity(day,window):raise ValueError('计算期间来源变化，结果未发布')
-            result={'day':day,'window':window,'states':states,'sources':sources,'identity':identity,
+            result={'day':day,'window':window,'states':states,'sources':sources,'benchmark':benchmark,'identity':identity,
                     'eventMethod':'相邻交易日日级主动净额比严格变号或负值变化；状态仅随窗口内后续有效观测更新；未知不跨越',
                     'priceMethod':'本地 close×adj_factor 比值；N日收益使用窗口前一交易日为基点；历史当时可得性未验证',
                     'scope':'日级价格／成交额／已识别主动方向。已校准旧来源0买1卖，逐条买卖编号复核；未校准来源及冲突记录未知。无自动吸筹、支撑或买卖触发。'}
