@@ -115,13 +115,16 @@ function chooseSnapshot(event) {
   const key = event.target.value
   // Keep the selector aligned with the evidence that is actually displayed.
   event.target.value = snapshotId.value
-  if (!key) {
-    const ready = dateRows.value.find(row => row.day === document.value?.day && row.status === 'ready') || dateRows.value.find(row => row.status === 'ready')
-    if (!ready) { buildMessage.value = '没有可查看的最新报告；当前快照保持只读。'; return }
-    targetDay.value = ready.day
-    return chooseDay()
-  }
+  if (!key) return returnLive()
   load({ key })
+}
+
+function returnLive() {
+  if (!snapshotId.value) return
+  const ready = dateRows.value.find(row => row.day === document.value?.day && row.status === 'ready') || dateRows.value.find(row => row.status === 'ready')
+  if (!ready) { buildMessage.value = '没有可查看的最新报告；当前快照保持只读。'; return }
+  targetDay.value = ready.day
+  chooseDay()
 }
 
 async function buildSelectedDay() {
@@ -233,6 +236,7 @@ onBeforeUnmount(() => { buildRequest++; clearTimeout(buildTimer) })
       <button v-if="!snapshotId" class="save-button" :disabled="buildBusy || sourceStatus?.status !== 'ready' || targetDay === document?.day" @click="chooseDay">查看所选日期</button>
       <button v-if="!snapshotId" class="save-button secondary" :disabled="buildBusy || !sourceStatus?.canBuild || sourceStatus?.status === 'ready'" @click="buildSelectedDay">{{ buildBusy ? '计算中…' : '计算所选日期' }}</button>
       <label>历史快照<select :value="snapshotId" @change="chooseSnapshot"><option value="">最新数据</option><option v-for="item in saved" :key="item.id" :value="item.id">{{ item.day }} · {{ new Date(item.savedAt).toLocaleString() }}</option></select></label>
+      <button v-if="snapshotId" class="save-button secondary" :disabled="busy" @click="returnLive">返回最新数据</button>
       <button v-if="document?.mode === 'live'" class="save-button" :disabled="saving" @click="save">{{ saving ? '保存中…' : '保存当前证据快照' }}</button>
     </nav>
     <p v-if="sourceStatus && !snapshotId" class="scope">所选 {{ targetDay }}：{{ sourceStatus.message }}{{ !sourceStatus.canBuild ? '；最近 7 交易日的正式文件或日历不足，暂不可计算' : '' }}{{ !sourceStatus.minute ? '；当日分钟文件缺失' : '' }}</p>
