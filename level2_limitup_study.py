@@ -9,7 +9,7 @@ from pathlib import Path
 
 from level2_contract import PAT
 from level2_events import usable
-from level2_validation import _price, _return, leave_one_day_out_excess
+from level2_validation import _price, _return, entry_gate, leave_one_day_out_excess
 
 
 CONFIG = Path(__file__).with_name('level2_limitup_sources.json')
@@ -128,6 +128,7 @@ def limitup_study(flows, sources, limitups, prices, bars, days, start, end, asof
         raise ValueError('涨停研究起点前缺前一交易日')
     groups = defaultdict(lambda: {'events': 0, 'observed': 0, 'pending': 0,
                                   'missingPrice': 0, 'returns': [], 'excesses': [], 'boardExcesses': [],
+                                  'eventAmounts': [], 'entryGateCounts': defaultdict(int),
                                   'daily': defaultdict(lambda: {'events': 0, 'observed': 0,
                                                                 'returns': [], 'excesses': [], 'boardExcesses': []})})
     board_returns = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
@@ -228,9 +229,12 @@ def limitup_study(flows, sources, limitups, prices, bars, days, start, end, asof
                 daily = group['daily'][day]
                 group['events'] += 1
                 daily['events'] += 1
+                group['eventAmounts'].append(current[code]['amount'])
                 if not mature:
                     group['pending'] += 1
                     continue
+                entry_day = days[position + 1]
+                group['entryGateCounts'][entry_gate(bars.get(entry_day, {}).get(code))] += 1
                 outcome = _return(prices[day][code], target_prices.get(code))
                 if outcome is None:
                     group['missingPrice'] += 1
@@ -269,6 +273,9 @@ def limitup_study(flows, sources, limitups, prices, bars, days, start, end, asof
                                     'stockDirection': stock_direction,
                                     'events': group['events'], 'observed': group['observed'],
                                     'pending': group['pending'], 'missingPrice': group['missingPrice'],
+                                    'medianEventAmountYuan': (statistics.median(group['eventAmounts'])
+                                                              if group['eventAmounts'] else None),
+                                    'entryGateCounts': dict(sorted(group['entryGateCounts'].items())),
                                     'triggerDays': len(daily_rows), 'comparableDays': len(comparable),
                                     'meanReturnPct': statistics.mean(group['returns']) if group['returns'] else None,
                                     'meanExcessPct': statistics.mean(group['excesses']) if group['excesses'] else None,
@@ -316,15 +323,24 @@ def limitup_study(flows, sources, limitups, prices, bars, days, start, end, asof
                         if improving and weakening:
                             board_pairs.append({'day': day, 'board': board,
                                                 'improvingN': len(improving), 'weakeningN': len(weakening),
-                                                'spreadPct': statistics.mean(improving) - statistics.mean(weakening)})
+                                                'spreadPct': statistics.mean(improving) - statistics.mean(weakening),
+                                                'medianStockSpreadPct': (statistics.median(improving)
+                                                                         - statistics.median(weakening))})
                 for board in ('ALL', *BOARDS):
                     selected_pairs = [row for row in board_pairs if board == 'ALL' or row['board'] == board]
                     by_day = defaultdict(list)
+                    median_by_day = defaultdict(list)
+                    three_by_day = defaultdict(list)
                     for pair in selected_pairs:
                         by_day[pair['day']].append(pair['spreadPct'])
+                        median_by_day[pair['day']].append(pair['medianStockSpreadPct'])
+                        if pair['improvingN'] >= 3 and pair['weakeningN'] >= 3:
+                            three_by_day[pair['day']].append(pair['spreadPct'])
                     daily = [{'day': day, 'pairedBoards': len(spreads), 'spreadPct': statistics.mean(spreads)}
                              for day, spreads in sorted(by_day.items())]
                     spread_values = [row['spreadPct'] for row in daily]
+                    median_stock_days = [statistics.mean(spreads) for _, spreads in sorted(median_by_day.items())]
+                    three_days = [statistics.mean(spreads) for _, spreads in sorted(three_by_day.items()) if spreads]
                     board_contrasts.append({'cohort': cohort, 'horizon': horizon,
                                             'marketDirection': market_direction, 'board': board,
                                             'pairedBoardDays': len(selected_pairs), 'pairedDays': len(daily),
@@ -332,6 +348,13 @@ def limitup_study(flows, sources, limitups, prices, bars, days, start, end, asof
                                             'weakeningN': sum(row['weakeningN'] for row in selected_pairs),
                                             'equalDayMeanSpreadPct': (statistics.mean(spread_values)
                                                                       if spread_values else None),
+                                            'medianDailySpreadPct': (statistics.median(spread_values)
+                                                                      if spread_values else None),
+                                            'equalDayMedianStockSpreadPct': (statistics.mean(median_stock_days)
+                                                                             if median_stock_days else None),
+                                            'minThreeEachSideDays': len(three_days),
+                                            'minThreeEachSideSpreadPct': (statistics.mean(three_days)
+                                                                           if three_days else None),
                                             'leaveOneDayOutSpread': leave_one_day_out_excess(
                                                 [{'meanExcessPct': row['spreadPct']} for row in daily]),
                                             'daily': daily})
@@ -345,4 +368,5 @@ def limitup_study(flows, sources, limitups, prices, bars, days, start, end, asof
                             '市场方向按日共享，市场改善／恶化组的跨日比较混有行情时期因素',
                             '同日U股均值只作同群价格基准；缺价格不补零，剔一范围不是显著性检验',
                             '板块内对照只控制代码板块与事件日期，未控制行业、市值、容量、封单或可成交性',
+                            '中位数与每组至少3只只作预先固定的极值敏感性诊断；触发日成交额和次日日线门槛不等于可成交容量或订单成交',
                             '本地涨停列表与复权因子无历史采集时间冻结，严格 PIT 未验证']}

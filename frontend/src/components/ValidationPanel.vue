@@ -159,6 +159,7 @@ async function loadDetail(code = null) {
   } finally { if (id === detailSequence) detailBusy.value = false }
 }
 const point = value => Number.isFinite(value) ? formatPct(value).replace('%', ' pp') : '未知'
+const amountYuan = value => Number.isFinite(value) ? `${(value / 1e8).toFixed(2)} 亿` : '未知'
 const directionName = { IMPROVING: '改善', WEAKENING: '恶化' }
 const boardName = { ALL: '同日同板块合并', MAIN: '沪深主板', GEM: '创业板', STAR: '科创板' }
 const limitStatusName = { COMPARABLE: '可比较', MISSING_LIMIT_LIST: '涨停名单缺档', MISSING_FLOW: 'Level‑2 缺档',
@@ -168,7 +169,10 @@ const sensitivityRange = audit => !audit ? '旧结果未保存' : audit.comparab
   ? `不足两日（${audit.comparableDays} 日）` : `${point(audit.minPct)} ～ ${point(audit.maxPct)}`
 const resultLabel = row => row.status === 'PENDING' ? '未到期' : row.status === 'MISSING_PRICE' ? '价格缺失' : formatPct(row.returnPct)
 const entryGateName = { PENDING: '次日未到', MISSING_BAR: '缺日线', MISSING_PRICE: '价缺失', INVALID_OHLC: '价关系异常', UNKNOWN_VOLUME: '量未知', NO_VOLUME: '零成交量', ONE_PRICE_SESSION: '单一价位', PRICE_REFERENCE_ONLY: '仅价格参考' }
-const entryCounts = row => row.entryGateCounts ? Object.entries(row.entryGateCounts).map(([key, count]) => `${entryGateName[key] || key} ${count}`).join(' · ') : '旧结果未保存'
+const entryCounts = row => row.entryGateCounts == null ? '旧结果未保存' : Object.keys(row.entryGateCounts).length
+  ? Object.entries(row.entryGateCounts).map(([key, count]) => `${entryGateName[key] || key} ${count}`).join(' · ') : '暂无已检查次日日线'
+const gateAssessed = row => row.entryGateCounts == null ? '旧结果未知'
+  : Object.values(row.entryGateCounts).reduce((sum, value) => sum + value, 0)
 const drawdownSummary = row => row.closeDrawdownObserved == null ? '旧结果未保存' : row.closeDrawdownObserved ? `${formatPct(row.medianMaxCloseDrawdownPct)} · ${row.closeDrawdownObserved}/${row.events} 条路径` : `不可计算 · 0/${row.events} 条路径`
 const drawdownLabel = row => !row.closeDrawdownStatus ? '旧结果未保存' : row.closeDrawdownStatus === 'PENDING' ? '未到期' : row.closeDrawdownStatus === 'MISSING_PRICE' ? '路径缺价格' : `${formatPct(row.maxCloseDrawdownPct)}${row.drawdownTroughDay ? `（${row.drawdownPeakDay} → ${row.drawdownTroughDay}）` : '（未出现回撤）'}`
 const dayPct = (day, key) => day.pending === day.events ? '未到期' : formatPct(day[key])
@@ -214,7 +218,15 @@ onBeforeUnmount(() => { sequence++; detailSequence++; clearTimeout(timer) })
               <p class="footnote">先在同一交易日、同一代码板块内比较个股资金改善／恶化，再对当日有配对的板块等权、对事件日等权。缺任一方向的板块不进入配对；这只控制板块与日期，不控制行业、市值、封板质量或可成交性。</p>
               <div class="table-scroll"><table class="validation-table"><thead><tr><th>市场状态</th><th>板块</th><th>配对板块×日／事件日</th><th>改善／恶化样本</th><th>同板块收益差</th><th>逐日剔一范围</th></tr></thead><tbody><tr v-for="row in boardContrasts" :key="row.marketDirection + row.board"><td>{{ directionName[row.marketDirection] }}</td><td>{{ boardName[row.board] }}</td><td>{{ row.pairedBoardDays }} / {{ row.pairedDays }}</td><td>{{ row.improvingN }} / {{ row.weakeningN }}</td><td>{{ point(row.equalDayMeanSpreadPct) }}</td><td>{{ sensitivityRange(row.leaveOneDayOutSpread) }}</td></tr></tbody></table></div>
               <p class="footnote">四格的同板块 U 均值超额只作另一价格基准：<span v-for="row in limitRows" :key="row.marketDirection + row.stockDirection">{{ directionName[row.marketDirection] }}／{{ directionName[row.stockDirection] }} {{ point(row.equalDayMeanBoardExcessPct) }}（{{ row.boardBenchmarkDays ?? '未知' }} 日） · </span>旧结果缺字段显示未知。</p>
+              <details class="validation-event validation-day-breakdown"><summary>极端收益敏感性 · 不改变原配对样本</summary>
+                <p class="footnote">“逐日中位”先按原法算每天的同板块收益差，再取日期中位数；“个股中位”先在每个板块×日分别取两组股票收益中位数，再按日等权。每侧至少 3 只仅作固定门槛对照，不替换主结果；样本太少时显示不可比。</p>
+                <div class="table-scroll"><table class="validation-table"><thead><tr><th>市场／板块</th><th>原均值差</th><th>逐日中位</th><th>个股中位差 · 按日等权</th><th>每侧≥3只 · 日期</th><th>每侧≥3只 · 均值差</th></tr></thead><tbody><tr v-for="row in boardContrasts" :key="row.marketDirection + row.board"><td>{{ directionName[row.marketDirection] }}／{{ boardName[row.board] }}</td><td>{{ point(row.equalDayMeanSpreadPct) }}</td><td>{{ point(row.medianDailySpreadPct) }}</td><td>{{ point(row.equalDayMedianStockSpreadPct) }}</td><td>{{ row.minThreeEachSideDays ?? '旧结果未知' }}</td><td>{{ point(row.minThreeEachSideSpreadPct) }}</td></tr></tbody></table></div>
+              </details>
             </template>
+          </details>
+          <details class="validation-event validation-day-breakdown"><summary>成交容量与次日日线门槛 · 仅诊断</summary>
+            <p class="footnote">触发日成交额为 Level‑2 有效成交的组内中位数，不是可下单容量。次日日线门槛在后续结果成熟时统计，缺日线、零量和单一价位各自保留；“仅价格参考”仍不证明能排队买入或按收盘价成交。</p>
+            <div class="table-scroll"><table class="validation-table"><thead><tr><th>市场／个股</th><th>触发日成交额中位</th><th>次日已检查／触发数</th><th>次日日线门槛分布</th></tr></thead><tbody><tr v-for="row in limitRows" :key="row.marketDirection + row.stockDirection"><td>{{ directionName[row.marketDirection] }}／{{ directionName[row.stockDirection] }}</td><td>{{ amountYuan(row.medianEventAmountYuan) }}</td><td>{{ gateAssessed(row) }} / {{ row.events }}</td><td>{{ entryCounts(row) }}</td></tr></tbody></table></div>
           </details>
           <details class="validation-event validation-day-breakdown"><summary>涨停专项逐日覆盖 · {{ limitCoverage.requested }} 个事件日</summary><p class="footnote">“可比较”只代表文件、来源、市场变化、至少一只 U 股复权价格和可辨资金方向通过本层门槛；不代表可成交。市场共同样本排除当日 U 股；未运行的价格核对显示“未查”而非零。</p><div class="table-scroll"><table class="validation-table"><thead><tr><th>日期</th><th>状态</th><th>源 U／价格有效／资金有效</th><th>市场共同样本</th><th>市场变化</th><th>缺复权／收盘冲突</th></tr></thead><tbody><tr v-for="day in limitStudy.coverage" :key="day.day"><th scope="row">{{ day.day }}</th><td>{{ limitStatusName[day.studyStatus] || day.studyStatus }}</td><td>{{ day.uRows ?? '未知' }} / {{ day.matchedClose ?? '未查' }} / {{ day.validStockDirection ?? '未查' }}</td><td>{{ day.market?.commonStocks ?? '不可比' }}</td><td>{{ point(day.market?.deltaPP) }}</td><td>{{ day.missingAdjustedClose ?? '未查' }} / {{ day.mismatchedRawClose ?? '未查' }}</td></tr></tbody></table></div></details>
           <p class="footnote">四格与配对差只说明历史分层；收盘后才能观察 U、资金和市场状态，不能解释为收盘买入收益、次日买点或因子显著性。</p>

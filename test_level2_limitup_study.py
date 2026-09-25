@@ -147,6 +147,8 @@ class LimitUpStudyTests(unittest.TestCase):
         self.assertAlmostEqual(matched['equalDayMeanSpreadPct'], 20)
         self.assertEqual((matched['pairedBoardDays'], matched['pairedDays'],
                           matched['improvingN'], matched['weakeningN']), (1, 1, 1, 1))
+        self.assertEqual(matched['minThreeEachSideDays'], 0)
+        self.assertIsNone(matched['minThreeEachSideSpreadPct'])
         improving = next(row for row in result['summary']
                          if row['cohort'] == 'OUT_OF_SAMPLE' and row['marketDirection'] == 'IMPROVING'
                          and row['stockDirection'] == 'IMPROVING')
@@ -169,6 +171,41 @@ class LimitUpStudyTests(unittest.TestCase):
         self.assertEqual(result['coverage'][1]['matchedClose'], 1)
         self.assertEqual(result['coverage'][1]['missingStockDirection'], 1)
         self.assertFalse(any(row['events'] for row in result['summary']))
+
+    def test_outlier_sensitivity_and_next_session_capacity_proxies(self):
+        codes = [f'0000{number:02d}.SZ' for number in range(10, 16)]
+        flows = {
+            '20260914': {**{code: flow(0) for code in codes}, X: flow(-20)},
+            '20260915': {**{code: flow(0) for code in codes}, X: flow(-20)},
+            '20260916': {**{code: flow(5 if index < 3 else -5)
+                           for index, code in enumerate(codes)}, X: flow(-10)},
+        }
+        limitups = {'20260915': ({'day': '20260915', 'status': 'AVAILABLE',
+                                   'uRows': 0, 'eligibleRows': 0}, {}),
+                    '20260916': ({'day': '20260916', 'status': 'AVAILABLE',
+                                   'uRows': 6, 'eligibleRows': 6}, {code: 10 for code in codes})}
+        prices = {'20260916': {code: 10 for code in codes},
+                  '20260917': dict(zip(codes, (10.1, 10.2, 13, 10, 9.9, 9.8)))}
+        bars = {'20260916': {code: (10, 10, 10, 10, 100) for code in codes},
+                '20260917': {code: (10, 10, 10, 10, 100) if index == 0 else
+                             (10, 10.2, 9.8, 10, 0 if index == 1 else 100)
+                             for index, code in enumerate(codes)}}
+        result = limitup_study(flows, {day: 'NATIVE' for day in DAYS[:3]}, limitups,
+                               prices, bars, DAYS, '20260915', '20260916',
+                               '20260917', '20260915', (1,))
+        contrast = next(row for row in result['boardMatchedContrasts']
+                        if row['cohort'] == 'OUT_OF_SAMPLE' and row['horizon'] == 1
+                        and row['marketDirection'] == 'IMPROVING' and row['board'] == 'MAIN')
+        self.assertAlmostEqual(contrast['equalDayMeanSpreadPct'], 12)
+        self.assertAlmostEqual(contrast['equalDayMedianStockSpreadPct'], 3)
+        self.assertEqual(contrast['minThreeEachSideDays'], 1)
+        self.assertAlmostEqual(contrast['minThreeEachSideSpreadPct'], 12)
+        stronger = next(row for row in result['summary'] if row['cohort'] == 'OUT_OF_SAMPLE'
+                        and row['horizon'] == 1 and row['marketDirection'] == 'IMPROVING'
+                        and row['stockDirection'] == 'IMPROVING')
+        self.assertEqual(stronger['medianEventAmountYuan'], 100)
+        self.assertEqual(stronger['entryGateCounts'],
+                         {'NO_VOLUME': 1, 'ONE_PRICE_SESSION': 1, 'PRICE_REFERENCE_ONLY': 1})
 
 
 if __name__ == '__main__':
