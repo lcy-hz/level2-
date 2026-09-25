@@ -1,6 +1,6 @@
 import unittest
 
-from level2_quote_path import quote_path
+from level2_quote_path import quote_path, ten_level_imbalance
 
 
 class QuotePathTests(unittest.TestCase):
@@ -48,6 +48,22 @@ class QuotePathTests(unittest.TestCase):
         self.assertEqual(segment['sameBidComparable'],0)
         self.assertEqual(segment['sameBidDisplayedRise'],0)
         self.assertEqual(segment['medianTopImbalancePct'],(0+100/3)/2)
+
+    def test_ten_level_requires_complete_ordered_ladder(self):
+        row = ('20260922', '93000000', '10000', '10100', '100', '200',
+               *[str(10000 - 100*i) for i in range(1, 10)],
+               *[str(10100 + 100*i) for i in range(1, 10)],
+               *['10'] * 9, *['20'] * 9)
+        self.assertEqual(len(row), 42)
+        self.assertAlmostEqual(ten_level_imbalance(row), -100/3)
+        segment = quote_path([row], '20260922')['segments'][0]
+        self.assertEqual(segment['tenLevelValid'], 1)
+        self.assertAlmostEqual(segment['medianTenLevelImbalancePct'], -100/3)
+        self.assertIsNone(ten_level_imbalance(row[:6]))
+        invalid_price = list(row); invalid_price[7] = invalid_price[6]
+        self.assertIsNone(ten_level_imbalance(invalid_price))
+        missing_qty = list(row); missing_qty[25] = None
+        self.assertIsNone(ten_level_imbalance(missing_qty))
 
     def test_duplicate_regular_time_or_bad_date_disables_path(self):
         rows=[('20260922','93000000','10000','10100'),

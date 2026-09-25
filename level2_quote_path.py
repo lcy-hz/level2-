@@ -16,8 +16,32 @@ def in_segment(time, start, end, inclusive):
     return start <= time and (time <= end if inclusive else time < end)
 
 
+def ten_level_imbalance(row):
+    """Return visible ten-level quantity imbalance, only for a complete ordered ladder."""
+    if len(row) != 42:
+        return None
+    bid_prices = [row[2], *row[6:15]]
+    ask_prices = [row[3], *row[15:24]]
+    bid_qtys = [row[4], *row[24:33]]
+    ask_qtys = [row[5], *row[33:42]]
+    try:
+        bp = [float(x) for x in bid_prices]
+        ap = [float(x) for x in ask_prices]
+        bq = [float(x) for x in bid_qtys]
+        aq = [float(x) for x in ask_qtys]
+    except (TypeError, ValueError):
+        return None
+    if (not all(math.isfinite(x) and x > 0 for x in bp + ap) or
+            not all(math.isfinite(x) and x >= 0 for x in bq + aq) or
+            bp[0] > ap[0] or
+            any(bp[i] <= bp[i + 1] or ap[i] >= ap[i + 1] for i in range(9))):
+        return None
+    buy, sell = sum(bq), sum(aq)
+    return 100 * (buy - sell) / (buy + sell) if buy + sell > 0 else None
+
+
 def quote_path(rows, day):
-    """rows: day/time/bid1/ask1[/bid_qty1/ask_qty1]; prices scaled by 10000."""
+    """rows: day/time/bid1/ask1/qty1 pair[/9 more levels]; prices scaled by 10000."""
     observed = []
     bad_day = 0
     for row in rows:
@@ -31,7 +55,7 @@ def quote_path(rows, day):
         except (TypeError, ValueError):
             continue
         if any(in_segment(time, start, end, inclusive) for _, start, end, inclusive in SEGMENTS):
-            observed.append((time, bid, ask, bid_qty, ask_qty))
+            observed.append((time, bid, ask, bid_qty, ask_qty, ten_level_imbalance(row)))
     if bad_day:
         return {'status': 'INVALID_DATE', 'segments': [], 'badDateRows': bad_day,
                 'method': '买卖一档中间价，不是成交价、可成交收益或盘口队列恢复'}
@@ -44,10 +68,11 @@ def quote_path(rows, day):
         valid = []
         spreads = []
         imbalances = []
+        ten_imbalances = []
         same_bid_count = 0
         bid_rise_count = 0
         previous_depth = None
-        for time, bid, ask, bid_qty, ask_qty in sorted(segment, key=lambda item: item[0]):
+        for time, bid, ask, bid_qty, ask_qty, ten_imbalance in sorted(segment, key=lambda item: item[0]):
             try:
                 b, a = float(bid), float(ask)
             except (TypeError, ValueError):
@@ -66,6 +91,8 @@ def quote_path(rows, day):
                     previous_depth = None
                     continue
                 imbalances.append(100 * (buy_qty - sell_qty) / (buy_qty + sell_qty))
+                if ten_imbalance is not None:
+                    ten_imbalances.append(ten_imbalance)
                 if previous_depth is not None and previous_depth[0] == b:
                     same_bid_count += 1
                     bid_rise_count += buy_qty > previous_depth[1]
@@ -82,6 +109,8 @@ def quote_path(rows, day):
                'medianSpreadBps': median(spreads) if spreads else None,
                'medianTopImbalancePct': median(imbalances) if imbalances else None,
                'depthValid': len(imbalances),
+               'medianTenLevelImbalancePct': median(ten_imbalances) if ten_imbalances else None,
+               'tenLevelValid': len(ten_imbalances),
                'sameBidComparable': same_bid_count,
                'sameBidDisplayedRise': bid_rise_count}
         if len(valid) >= 2:

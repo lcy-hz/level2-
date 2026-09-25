@@ -33,6 +33,11 @@ class DetailTests(unittest.TestCase):
             ['600000.SH', self.day, '93000000', '99000', '101000', '100', '200'],
             ['600000.SH', self.day, '95957000', '100000', '102000', '200', '100'],
         ], columns=['万得代码', '自然日', '时间', '申买价1', '申卖价1', '申买量1', '申卖量1'])
+        for level in range(2, 11):
+            snapshots[f'申买价{level}'] = snapshots['申买价1'].astype(int).sub(1000 * (level - 1)).astype(str)
+            snapshots[f'申卖价{level}'] = snapshots['申卖价1'].astype(int).add(1000 * (level - 1)).astype(str)
+            snapshots[f'申买量{level}'] = str(10 * level)
+            snapshots[f'申卖量{level}'] = str(5 * level)
         con.register('trades_fixture', trades)
         con.register('orders_fixture', orders)
         con.register('snapshots_fixture', snapshots)
@@ -55,6 +60,7 @@ class DetailTests(unittest.TestCase):
         self.assertEqual(result['quotePath']['status'],'AVAILABLE')
         self.assertAlmostEqual(result['quotePath']['segments'][0]['midChangePct'],1)
         self.assertEqual(result['quotePath']['segments'][0]['depthValid'],2)
+        self.assertEqual(result['quotePath']['segments'][0]['tenLevelValid'],2)
 
     def test_unknown_direction_is_not_zero(self):
         con=duckdb.connect();path=self.root/f'deal_{self.day}.parquet'
