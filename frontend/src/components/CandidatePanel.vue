@@ -1,6 +1,6 @@
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue'
-import { filterCandidates, futureCloseChange, priceDirection, snapshotClock, stateNarrative, summarizeCandidatePools } from '../candidateFilters.js'
+import { directionQuality, filterCandidates, futureCloseChange, priceDirection, snapshotClock, stateNarrative, summarizeCandidatePools } from '../candidateFilters.js'
 import KlineTrigger from './KlineTrigger.vue'
 import DetailEvidence from './DetailEvidence.vue'
 
@@ -100,6 +100,7 @@ watch(pages, count => { if (page.value > count) page.value = count })
         <div class="candidate-tags"><span class="badge">{{ card.label }}</span><span class="price-direction" :class="priceDirection(card.returnSign).tone">{{ priceDirection(card.returnSign).text }}</span></div><strong>{{ card.name }} <KlineTrigger :code="card.code" :name="card.name" :day="day" :frozen="frozen" :snapshot-charts="snapshotCharts" @loaded="emit('chart-loaded', $event)" /></strong>
         <span>收盘 {{ card.close ?? '未知' }} · VWAP {{ card.vwap ?? '未知' }}</span>
         <span>涨跌 <b :class="tone(card.ret)">{{ percent(card.ret) }}</b> · 主动净额 <b :class="tone(card.net)">{{ money(card.net) }}</b></span>
+        <span class="muted">方向未知金额 {{ money(card.unknownAmount) }} · {{ directionQuality(card.directionStatus) }}</span>
         <span class="muted">十档 买 {{ card.bid?.toLocaleString() ?? '未知' }} / 卖 {{ card.ask?.toLocaleString() ?? '未知' }}</span>
         <template v-if="linkedView"><span>净额比 <b :class="tone(states.get(card.code)?.level)">{{ percent(states.get(card.code)?.level) }}</b> · 较前日 {{ pp(delta(states.get(card.code))) }}</span><span class="muted">同向 {{ streak(states.get(card.code)) }} · 连续改善 {{ improvement(states.get(card.code)) }} · 有效 {{ coverage(states.get(card.code)) }}</span></template>
         <button type="button" class="card-detail" @click.stop="selected = card">查看证据</button>

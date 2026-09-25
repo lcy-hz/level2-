@@ -5,8 +5,8 @@ import { savedDetailEvidence } from '../detailEvidence.js'
 
 const props = defineProps({ card: { type: Object, required: true }, day: { type: String, required: true }, frozen: { type: Boolean, default: false } })
 const emit = defineEmits(['loaded'])
-const saved = props.frozen ? savedDetailEvidence(props.card) : null
-const state = ref(props.frozen ? { status: saved ? 'done' : 'unavailable', message: saved?.legacySummary ? '历史快照已保存旧版重点股汇总；新式盘口深查未保存' : saved ? '快照内已保存该股深查' : '快照未保存该股深查；不补算' } : { status: 'idle', message: '尚未查询本地缓存' })
+const saved = savedDetailEvidence(props.card)
+const state = ref(props.frozen ? { status: saved ? 'done' : 'unavailable', message: saved?.legacySummary ? '历史快照已保存旧版重点股汇总；新式盘口深查未保存' : saved ? '快照内已保存该股深查' : '快照未保存该股深查；不补算' } : { status: 'idle', message: saved?.legacySummary ? '报告已保存旧版重点股汇总；正在查询新式深查缓存' : '尚未查询本地缓存' })
 const result = ref(null)
 let sequence = 0
 let timer = null
@@ -73,10 +73,10 @@ onBeforeUnmount(() => { sequence++; clearTimeout(timer) })
 
 <template>
   <section class="detail-evidence" aria-label="按需 Level-2 深查">
-    <div class="detail-heading"><h3>盘中与关联单深查</h3><button v-if="!frozen && !evidence" type="button" :disabled="busy" @click="calculate">{{ busy ? '计算中…' : state.status === 'error' ? '重试计算' : '点击计算' }}</button></div>
+    <div class="detail-heading"><h3>盘中与关联单深查</h3><button v-if="!frozen && !result && !card.computedDetail" type="button" :disabled="busy" @click="calculate">{{ busy ? '计算中…' : state.status === 'error' ? '重试计算' : evidence?.legacySummary ? '计算新式深查' : '点击计算' }}</button></div>
     <p class="footnote" role="status">{{ state.message }}。{{ frozen ? '只读快照，不读取最新数据。' : '仅计算本股、当前报告日；结果缓存于本机。' }}</p>
     <template v-if="evidence">
-      <p v-if="evidence.legacySummary" class="footnote">旧版重点股汇总只保存五时段主动成交、关联编号分组和 order_raw 类型统计；逐笔路径、盘口结构、编号匹配审计未保存，不读取当前数据回填。</p>
+      <p v-if="evidence.legacySummary" class="footnote">旧版重点股汇总只保存五时段主动成交、关联编号分组和 order_raw 类型统计；逐笔路径、盘口结构、编号匹配审计未保存。{{ frozen ? '快照不补读当前数据。' : '如需新式深查，可另行计算；不改写报告原始汇总。' }}</p>
       <p v-else class="footnote">成交 {{ evidence.tradeRows?.toLocaleString() ?? '未知' }} 条 · 有效时段成交额覆盖 {{ ratio(evidence.regularCoverage) }} · 主动净额 {{ money(evidence.net) }} · 未知方向金额 {{ money(evidence.unknownAmount) }}</p>
       <p v-if="!evidence.legacySummary" class="footnote">连续竞价逐笔成交价已观测回撤：{{ tradeDrawdown }}。仅用与报告成交额相同的正价正量有效成交；成交编号唯一且时间非降时按编号排序。不含集合竞价或无成交价位，也不代表可成交退出或含滑点收益。</p>
       <h4>盘中五时段</h4>

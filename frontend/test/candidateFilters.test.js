@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { filterCandidates, futureCloseChange, normalizeCandidateFilters, priceDirection, snapshotClock, stateNarrative, summarizeCandidatePools } from '../src/candidateFilters.js'
+import { directionQuality, filterCandidates, futureCloseChange, normalizeCandidateFilters, priceDirection, snapshotClock, stateNarrative, summarizeCandidatePools } from '../src/candidateFilters.js'
 
 const rows = [
   { code: '000001.SZ', name: '甲', label: '主动', returnSign: 1, net: 10 },
@@ -13,6 +13,12 @@ test('candidate price direction distinguishes flat from missing evidence', () =>
   assert.equal(priceDirection(-1).text, '↓ 下跌')
   assert.equal(priceDirection(0).text, '— 平盘')
   assert.equal(priceDirection(null).text, '— 未知')
+})
+
+test('candidate direction quality does not turn absent status into available', () => {
+  assert.equal(directionQuality('AVAILABLE'), '方向可计算')
+  assert.equal(directionQuality('UNKNOWN'), '资金方向不可判定')
+  assert.equal(directionQuality(null), '方向状态未核验')
 })
 
 test('historical future close change keeps missing, zero and tiny moves distinct', () => {

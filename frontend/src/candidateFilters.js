@@ -16,6 +16,12 @@ export function priceDirection(sign) {
   return { text: '— 未知', tone: 'unknown' }
 }
 
+export function directionQuality(status) {
+  if (status === 'AVAILABLE') return '方向可计算'
+  if (status === 'UNKNOWN') return '资金方向不可判定'
+  return '方向状态未核验'
+}
+
 export function futureCloseChange(value) {
   if (!finite(value)) return '报告窗口内未观察'
   return `${value > 0 ? '+' : ''}${value !== 0 && Math.abs(value) < .005 ? value.toExponential(2) : value.toFixed(2)}%`
