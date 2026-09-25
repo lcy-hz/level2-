@@ -29,7 +29,8 @@ def _price(value):
 def _return(start, end):
     if not (_price(start) and _price(end)):
         return None
-    return 100 * (end / start - 1)
+    value = 100 * (end / start - 1)
+    return value if math.isfinite(value) else None
 
 
 def close_path_drawdown(path):
@@ -101,6 +102,19 @@ def input_timing_audit(flow_sources, price_days, price_root):
                 'days': rows}
     return {'method': 'LOCAL_LAST_MODIFIED_ONLY_NOT_PIT', 'strictPitVerified': False,
             'flow': counts(flow), 'price': counts(price)}
+
+
+def leave_one_day_out_excess(daily_rows):
+    """Equal-day mean after removing each comparable trigger day in turn."""
+    values = [row['meanExcessPct'] for row in daily_rows
+              if isinstance(row.get('meanExcessPct'), (int, float))
+              and math.isfinite(row['meanExcessPct'])]
+    if len(values) < 2:
+        return {'comparableDays': len(values), 'minPct': None, 'maxPct': None}
+    total = sum(values)
+    alternatives = [(total - value) / (len(values) - 1) for value in values]
+    return {'comparableDays': len(values), 'minPct': min(alternatives),
+            'maxPct': max(alternatives)}
 
 
 def study(flows, prices, days, start, end, asof, split, horizons=(1, 3, 5),
@@ -233,6 +247,7 @@ def study(flows, prices, days, start, end, asof, split, horizons=(1, 3, 5),
                        'benchmarkPct': daily['benchmarkPct'], 'benchmarkN': daily['benchmarkN'],
                        'meanExcessPct': (daily['excessSum'] / daily['excessN'] if daily['excessN'] else None)}
                       for day, daily in sorted(group['daily'].items())]
+        sensitivity = leave_one_day_out_excess(daily_rows)
         summary.append({'cohort': cohort, 'rule': rule, 'horizon': horizon,
                         'events': group['events'], 'observed': n,
                         'pending': group['pending'], 'missingPrice': group['missingPrice'],
@@ -240,6 +255,7 @@ def study(flows, prices, days, start, end, asof, split, horizons=(1, 3, 5),
                         'triggerDays': len(daily_rows),
                         'entryGateCounts': dict(sorted(group['entryGates'].items())),
                         'signalDayBreakdown': daily_rows,
+                        'leaveOneDayOutExcess': sensitivity,
                         'closeDrawdownObserved': len(group['closeDrawdowns']),
                         'medianMaxCloseDrawdownPct': (statistics.median(group['closeDrawdowns'])
                                                       if group['closeDrawdowns'] else None),

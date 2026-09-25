@@ -39,8 +39,17 @@ const evidenceDays = computed(() => {
 })
 const rows = computed(() => viewRows(result.value, selectedCohort.value, selectedHorizon.value))
 const chosenRule = computed(() => rows.value.some(row => row.rule === selectedRule.value) ? selectedRule.value : rows.value[0]?.rule)
-const dayBreakdown = computed(() => rows.value.find(row => row.rule === chosenRule.value)?.signalDayBreakdown)
+const chosenSummary = computed(() => rows.value.find(row => row.rule === chosenRule.value))
+const dayBreakdown = computed(() => chosenSummary.value?.signalDayBreakdown)
 const sourceBreakdown = computed(() => sourceStrata(result.value, dayBreakdown.value))
+const leaveOneDayOutText = computed(() => {
+  const audit = chosenSummary.value?.leaveOneDayOutExcess
+  if (!audit) return '旧结果未保存逐日剔一敏感性；不读取今日数据补齐。'
+  if (audit.comparableDays < 2) return `仅 ${audit.comparableDays} 个可比较事件日，无法逐日剔一。`
+  const range = `${formatPct(audit.minPct)} ～ ${formatPct(audit.maxPct)}`
+  const crossesZero = audit.minPct <= 0 && audit.maxPct >= 0
+  return `${audit.comparableDays} 个可比较日；每次剔除其中一日后的等权超额范围 ${range}。${crossesZero ? '区间含零，方向对单日敏感。' : '单次剔除未改变符号，但不等于显著或可交易。'}`
+})
 const timingFlagged = computed(() => {
   const audit = result.value?.inputTimingAudit
   if (!audit) return []
@@ -177,6 +186,7 @@ onBeforeUnmount(() => { sequence++; detailSequence++; clearTimeout(timer) })
         <p v-if="dayBreakdown == null" class="footnote">旧结果未保存逐事件日汇总。</p>
         <div v-else-if="dayBreakdown.length" class="table-scroll"><table class="validation-table"><thead><tr><th>触发日</th><th>前日→当日来源</th><th>触发数</th><th>已观察／未到期／缺价格</th><th>当日事件平均收益</th><th>同日基准</th><th>当日平均超额</th><th>基准覆盖</th></tr></thead><tbody><tr v-for="day in dayBreakdown" :key="day.day"><th scope="row">{{ day.day }}</th><td>{{ sourcePair(result, day.day) }}</td><td>{{ day.events.toLocaleString() }}</td><td>{{ day.observed }} / {{ day.pending }} / {{ day.missingPrice }}</td><td>{{ dayPct(day, 'meanReturnPct') }}</td><td>{{ dayPct(day, 'benchmarkPct') }}</td><td>{{ dayPct(day, 'meanExcessPct') }}</td><td>{{ day.benchmarkN == null ? '未到期' : day.benchmarkN + ' 只' }}</td></tr></tbody></table></div>
         <p v-else class="footnote">所选事件类型没有触发日。</p>
+        <p class="footnote">逐日剔一敏感性：{{ leaveOneDayOutText }}</p>
         <template v-if="sourceBreakdown?.length">
           <h4>来源分层 · 仅描述</h4>
           <div class="table-scroll"><table class="validation-table"><thead><tr><th>前日→当日来源</th><th>触发日</th><th>可比较日</th><th>可比较事件</th><th>按日等权超额</th></tr></thead><tbody><tr v-for="source in sourceBreakdown" :key="source.label"><th scope="row">{{ source.label }}</th><td>{{ source.triggerDays }}</td><td>{{ source.comparableDays }}</td><td>{{ source.comparableEvents }}</td><td>{{ formatPct(source.equalDayMeanExcessPct) }}</td></tr></tbody></table></div>

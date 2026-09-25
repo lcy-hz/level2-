@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-from level2_validation import study, ValidationService, entry_gate, close_path_drawdown, file_timing, input_timing_audit
+from level2_validation import study, ValidationService, entry_gate, close_path_drawdown, file_timing, input_timing_audit, leave_one_day_out_excess, _return
 
 
 DAYS = ['20260914', '20260915', '20260916', '20260917', '20260918',
@@ -20,6 +20,19 @@ def flow(ratio):
 
 
 class ValidationTests(unittest.TestCase):
+    def test_day_leave_one_out_requires_two_finite_comparable_days(self):
+        self.assertEqual(leave_one_day_out_excess([]),
+                         {'comparableDays': 0, 'minPct': None, 'maxPct': None})
+        self.assertEqual(leave_one_day_out_excess([{'meanExcessPct': 1},
+                                                   {'meanExcessPct': None}]),
+                         {'comparableDays': 1, 'minPct': None, 'maxPct': None})
+        self.assertEqual(leave_one_day_out_excess([{'meanExcessPct': 1},
+                                                   {'meanExcessPct': -2},
+                                                   {'meanExcessPct': 4},
+                                                   {'meanExcessPct': float('inf')}]),
+                         {'comparableDays': 3, 'minPct': -0.5, 'maxPct': 2.5})
+        self.assertIsNone(_return(1e-300, 1e300))
+
     def test_local_file_timing_is_audit_evidence_not_pit_proof(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -282,6 +295,9 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(same_rule['benchmarkPoolMeanN'], 3)
         self.assertAlmostEqual(same_rule['meanExcessPct'], 40 / 9)
         self.assertAlmostEqual(same_rule['equalDayMeanExcessPct'], 10 / 3)
+        self.assertEqual(same_rule['leaveOneDayOutExcess']['comparableDays'], 2)
+        self.assertAlmostEqual(same_rule['leaveOneDayOutExcess']['minPct'], 0)
+        self.assertAlmostEqual(same_rule['leaveOneDayOutExcess']['maxPct'], 20 / 3)
         daily = same_rule['signalDayBreakdown']
         self.assertEqual([row['day'] for row in daily], ['20260916', '20260917'])
         self.assertEqual([(row['events'], row['observed'], row['pending'], row['missingPrice'])
@@ -304,6 +320,8 @@ class ValidationTests(unittest.TestCase):
         summary = next(row for row in result['summary']
                        if row['rule'] == 'SELL_EASING' and row['cohort'] == 'OUT_OF_SAMPLE')
         self.assertEqual((summary['signalDays'], summary['triggerDays']), (0, 1))
+        self.assertEqual(summary['leaveOneDayOutExcess'],
+                         {'comparableDays': 0, 'minPct': None, 'maxPct': None})
         rows = summary['signalDayBreakdown']
         self.assertEqual([(row['day'], row['observed'], row['pending'], row['missingPrice'])
                           for row in rows], [('20260916', 0, 2, 0)])
