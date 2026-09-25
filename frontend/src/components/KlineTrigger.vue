@@ -1,7 +1,8 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, ref, useId } from 'vue'
 import { chart } from '../api.js'
-import { buildChartModel, minuteDrawdownText } from '../chartModel.js'
+import { buildChartModel, minuteBarReturnText, minuteDrawdownText } from '../chartModel.js'
+import { useEvidencePending } from '../evidencePending.js'
 
 const props = defineProps({
   code: { type: String, required: true }, name: { type: String, default: '' }, day: { type: String, required: true },
@@ -14,6 +15,8 @@ const pinned = ref(false)
 const kind = ref('day')
 const result = ref(null)
 const status = ref('')
+const loading = ref(false)
+useEvidencePending(loading)
 const selected = ref(0)
 const position = ref({ left: '12px', top: '12px', maxHeight: 'calc(100vh - 24px)' })
 const portalTarget = ref('body')
@@ -45,6 +48,7 @@ async function place(element) {
 
 function close(suppressNextHover = true) {
   sequence++
+  loading.value = false
   controller?.abort()
   controller = null
   clearTimeout(hideTimer)
@@ -93,6 +97,7 @@ async function show(nextKind, event, pin = false) {
   pinned.value = pin
   result.value = null
   status.value = props.frozen ? '读取快照内已保存图表…' : '正在重新读取本地文件…'
+  loading.value = true
   open.value = true
   await place(element)
   try {
@@ -117,6 +122,8 @@ async function show(nextKind, event, pin = false) {
     if (id !== sequence || error.name === 'AbortError') return
     status.value = error.message
     await place(element)
+  } finally {
+    if (id === sequence) loading.value = false
   }
 }
 function hover(nextKind, event) { if (event.pointerType !== 'touch' && !suppressHover) show(nextKind, event) }
@@ -149,7 +156,7 @@ onBeforeUnmount(close)
         <header><div><strong>{{ name }} {{ code }} · {{ kind === 'minute' ? '当日 1 分钟 K' : '前复权日 K' }}</strong><small>{{ dayLabel(day) }} · {{ frozen ? '只读快照' : '每次悬浮重新读取本地文件' }}</small></div><button type="button" @click="close()">关闭</button></header>
         <p v-if="status" class="chart-status" role="status">{{ status }}</p>
         <template v-if="result && model.bars.length">
-          <p class="chart-values" aria-live="polite">{{ dayLabel(selectedDate) }} · 开 {{ fmt(selectedBar[1]) }} 高 {{ fmt(selectedBar[2]) }} 低 {{ fmt(selectedBar[3]) }} 收 {{ fmt(selectedBar[4]) }} · 量 {{ selectedBar[5]?.toLocaleString() ?? '未知' }} 手 · 额 {{ money(selectedBar[6]) }}</p>
+          <p class="chart-values" aria-live="polite">{{ dayLabel(selectedDate) }} · 开 {{ fmt(selectedBar[1]) }} 高 {{ fmt(selectedBar[2]) }} 低 {{ fmt(selectedBar[3]) }} 收 {{ fmt(selectedBar[4]) }}<template v-if="kind === 'minute'"> · {{ minuteBarReturnText(selectedBar, result.preClose) }}</template> · 量 {{ selectedBar[5]?.toLocaleString() ?? '未知' }} 手 · 额 {{ money(selectedBar[6]) }}</p>
           <svg viewBox="0 0 530 290" class="chart-svg" tabindex="0" role="img" :aria-label="`${kind === 'minute' ? '分钟' : '日'} K 线与成交量；左右方向键查看数据`" @keydown.left.prevent="inspect(-1)" @keydown.right.prevent="inspect(1)">
             <g v-for="(tick, index) in model.ticks" :key="index"><line x1="52" x2="480" :y1="tick.y" :y2="tick.y" stroke="#30485b" /><text x="45" :y="tick.y + 4" text-anchor="end" fill="#a9bfd0" font-size="11">{{ fmt(tick.price) }}</text></g>
             <g v-for="gap in model.gaps" :key="gap.index"><rect :x="gap.x" y="14" :width="gap.width" height="182" fill="#899aa5" opacity=".12"><title>{{ gap.label }} 缺失，不补值</title></rect></g>
@@ -167,7 +174,7 @@ onBeforeUnmount(close)
           <p class="chart-note">红色空心＝收≥开，绿色实心＝收&lt;开；下方为成交量。{{ kind === 'minute' ? model.zero == null ? '昨收缺失，0 轴未知。' : `0 轴为昨收 ${fmt(result.preClose)}，垂直居中。` : '前复权价格与原始成交量分别展示。' }}缺失 {{ model.gaps.length }} {{ kind === 'minute' ? '分钟' : '交易日' }}，不插值。</p>
           <p v-if="kind === 'minute'" class="chart-note">{{ minuteDrawdown }}。仅比较有成交分钟的收盘价与此前峰值（含昨收），不包含分钟内高低点；缺档可能低估实际盘中回撤。</p>
         </template>
-        <details v-if="result" class="chart-note"><summary>来源与质量口径</summary><p>{{ result.source }} · {{ result.method }}</p><p v-if="result.quality">{{ result.quality }}</p><p v-if="result.rejected">排除 {{ result.rejected }} 条异常 OHLC。</p><p>读取时间：{{ result.readAt || '快照未记录' }}。本地最新不等于交易所实时行情。</p></details>
+        <details v-if="result" class="chart-note"><summary>来源与质量口径</summary><p>{{ result.source }} · {{ result.method }}</p><p v-if="result.quality">{{ result.quality }}</p><p v-if="kind === 'minute'">零成交量分钟：{{ Number.isFinite(result.zeroVolumeMinutes) ? result.zeroVolumeMinutes : '未保存' }} 个；此类分钟可能沿用前收或上一收盘，不视为新成交。</p><p v-if="result.rejected">排除 {{ result.rejected }} 条异常 OHLC。</p><p>读取时间：{{ result.readAt || '快照未记录' }}。本地最新不等于交易所实时行情。</p></details>
       </section>
     </Teleport>
   </span>

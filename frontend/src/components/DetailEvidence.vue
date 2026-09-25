@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { detailStatus, startDetail } from '../api.js'
 import { savedDetailEvidence } from '../detailEvidence.js'
+import { useEvidencePending } from '../evidencePending.js'
 
 const props = defineProps({ card: { type: Object, required: true }, day: { type: String, required: true }, frozen: { type: Boolean, default: false } })
 const emit = defineEmits(['loaded'])
@@ -13,6 +14,8 @@ let timer = null
 const evidence = computed(() => result.value || saved)
 const quoteBySegment = computed(() => Object.fromEntries((evidence.value?.quotePath?.segments || []).map(row => [row.s, row])))
 const busy = computed(() => ['queued', 'running'].includes(state.value.status))
+const checking = ref(false)
+useEvidencePending(computed(() => busy.value || checking.value))
 const money = value => !Number.isFinite(value) ? '未知' : Math.abs(value) >= 1e8 ? `${(value / 1e8).toFixed(2)} 亿` : `${(value / 1e4).toFixed(1)} 万`
 const ratio = value => Number.isFinite(value) ? `${value.toFixed(2)}%` : '未知'
 const quotePrice = value => Number.isFinite(value) ? value.toFixed(4) : evidence.value?.quotePath ? '不可比较' : '未保存'
@@ -56,8 +59,10 @@ function accept(response, id) {
 }
 async function poll(id) {
   if (id !== sequence) return
+  checking.value = true
   try { accept(await detailStatus(props.card.code, props.day), id) }
   catch (error) { if (id === sequence) state.value = { status: 'error', message: error.message } }
+  finally { if (id === sequence) checking.value = false }
 }
 async function calculate() {
   if (props.frozen) return

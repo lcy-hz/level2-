@@ -10,6 +10,14 @@ export function initialReportDay(rows) {
   return (dates.find(row => row.status === 'ready') || dates.find(row => row.canBuild) || dates[0])?.day || ''
 }
 
+export function observationWindow(value, fallback = 3, maxWindow = 60) {
+  const max = Number.isInteger(maxWindow) && maxWindow > 0 ? maxWindow : 60
+  const defaultValue = Number.isInteger(fallback) && fallback >= 1 && fallback <= max ? fallback : Math.min(3, max)
+  if (value === null || value === undefined || value === '') return defaultValue
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed >= 1 && parsed <= max ? parsed : defaultValue
+}
+
 export function describeDateStatus(row) {
   if (!row) return ''
   const parts = [row.message || '报告状态未知']

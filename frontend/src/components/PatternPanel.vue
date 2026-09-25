@@ -1,5 +1,6 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { useEvidencePending } from '../evidencePending.js'
 import { patternMeta, patternStatus, startPatterns } from '../api.js'
 import { defaultPatternFilters, filterPatterns } from '../patternFilters.js'
 import KlineTrigger from './KlineTrigger.vue'
@@ -15,6 +16,8 @@ const catalog = ref(result.value?.catalog || [])
 const receipt = ref('')
 const status = ref(props.frozen ? result.value ? '只读：展示快照内已冻结的形态结果' : '此快照未保存形态扫描，不读取最新数据' : '尚未计算形态；可按需读取本地前复权日 K 与指标')
 const pending = ref(false)
+const reading = ref(false)
+useEvidencePending(computed(() => pending.value || reading.value))
 const ui = reactive({ ...defaultPatternFilters, ...props.initialUi, types: [...(props.initialUi.types || [])] })
 const selected = ref(null)
 const loadedCodes = ref([])
@@ -39,11 +42,12 @@ function apply(response, id) {
   if (id !== sequence) return
   if (response.status === 'done') {
     if (!response.result) { poll(id); return }
-    if (response.result.day !== props.day) { status.value = '形态结果日期与报告不一致'; pending.value = false; return }
+    if (response.result.day !== props.day) { status.value = '形态结果日期与报告不一致'; pending.value = false; reading.value = false; return }
     result.value = response.result
     catalog.value = response.result.catalog
     receipt.value = response.receipt
     pending.value = false
+    reading.value = false
     ui.page = 1
     status.value = `${response.result.stocks.length} 只股票 · ${response.result.dates.length} 个交易日 · 形态计算完成；未经收益校准`
     emit('pattern-loaded', response.receipt)
@@ -52,13 +56,14 @@ function apply(response, id) {
     timer = setTimeout(() => poll(id), 1500)
   } else {
     pending.value = false
+    reading.value = false
     status.value = `${response.message || response.status}；无可用的当前结果`
   }
 }
 async function poll(id) {
   if (id !== sequence) return
   try { apply(await patternStatus(props.day), id) }
-  catch (error) { if (id === sequence) { pending.value = false; status.value = `读取失败：${error.message}` } }
+  catch (error) { if (id === sequence) { pending.value = false; reading.value = false; status.value = `读取失败：${error.message}` } }
 }
 async function start() {
   if (props.frozen || pending.value) return
@@ -78,6 +83,7 @@ function captureDetail(code) {
 }
 onMounted(async () => {
   if (props.frozen) return
+  reading.value = true
   const id = ++sequence
   try { const meta = await patternMeta(); if (id === sequence) catalog.value = meta.catalog }
   catch (error) { if (id === sequence) status.value = `读取形态规则失败：${error.message}` }

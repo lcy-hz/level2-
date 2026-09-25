@@ -50,3 +50,9 @@ export function minuteDrawdownText(data) {
   const times = item.peakTime && item.troughTime ? `（${item.peakTime} → ${item.troughTime}）` : ''
   return `已观测分钟收盘最大回撤 ${item.valuePct.toFixed(2)}%${times}；成交分钟 ${item.tradedMinutes}/${item.expectedMinutes}`
 }
+
+export function minuteBarReturnText(bar, preClose) {
+  if (!Number.isFinite(preClose) || preClose <= 0 || !Number.isFinite(bar?.[4])) return '相对昨收未知'
+  const value = (bar[4] / preClose - 1) * 100
+  return `较昨收 ${value > 0 ? '+' : ''}${value.toFixed(Math.abs(value) < .005 && value !== 0 ? 4 : 2)}%`
+}

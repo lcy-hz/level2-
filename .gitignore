@@ -4,6 +4,7 @@
 !/.gitignore
 !/README.md
 !/Level2数据实战使用框架.md
+!/Vue迁移功能差异清单.md
 !/generate_level2_report.py
 !/validate_level2_report.py
 !/level2_detail_server.py

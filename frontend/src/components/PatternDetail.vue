@@ -1,7 +1,8 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { patternDetail } from '../api.js'
 import { buildPatternChart } from '../patternChartModel.js'
+import { useEvidencePending } from '../evidencePending.js'
 
 const props = defineProps({ day: { type: String, required: true }, stock: { type: Object, required: true },
   initialEvent: { type: Object, required: true }, receipt: { type: String, default: '' },
@@ -10,12 +11,16 @@ const props = defineProps({ day: { type: String, required: true }, stock: { type
 const emit = defineEmits(['close', 'detail-loaded'])
 const detail = ref(null)
 const error = ref('正在读取形态逐根证据…')
+const loading = ref(false)
+useEvidencePending(loading)
 const selectedEventId = ref(props.initialEvent.eventId)
 const indicator = ref('MACD')
 const showMA = ref(true)
 const showSignals = ref(true)
 const selectedIndex = ref(null)
+const dialog = ref(null)
 let request = 0
+let returnFocus = null
 const selectedEvent = computed(() => props.stock.events.find(event => event.eventId === selectedEventId.value) || props.initialEvent)
 const model = computed(() => buildPatternChart(detail.value, selectedEvent.value, { indicator: indicator.value, showMA: showMA.value, showSignals: showSignals.value }))
 const candle = computed(() => selectedIndex.value == null ? null : detail.value?.bars[selectedIndex.value])
@@ -24,8 +29,23 @@ const indicators = computed(() => selectedIndex.value == null ? {} : detail.valu
 const fmt = (value, unit = '') => Number.isFinite(value) ? `${value.toFixed(2)}${unit}` : '未知'
 const stageName = stage => ({ forming: '○ 形成中', confirmed: '▲ 规则确认', invalidated: '× 已失效' })[stage] || stage
 function inspect(index) { if (model.value) selectedIndex.value = Math.max(model.value.begin, Math.min(model.value.end, index)) }
+function onDialogKeydown(event) {
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    event.stopPropagation()
+    emit('close')
+    return
+  }
+  if (event.key !== 'Tab') return
+  const focusable = [...(dialog.value?.querySelectorAll('button:not([disabled]), select:not([disabled]), input:not([disabled]), svg[tabindex="0"]') || [])]
+  if (!focusable.length) return
+  const first = focusable[0], last = focusable.at(-1)
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus() }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() }
+}
 async function load() {
   const id = ++request
+  loading.value = true
   try {
     const value = props.frozen ? props.snapshotDetails[props.stock.code] : await patternDetail(props.day, props.stock.code, props.receipt)
     if (id !== request) return
@@ -36,14 +56,23 @@ async function load() {
     error.value = ''
     if (!props.frozen) emit('detail-loaded', value.code)
   } catch (cause) { if (id === request) error.value = cause.message }
+  finally { if (id === request) loading.value = false }
 }
-onMounted(load)
-onBeforeUnmount(() => { request++ })
+onMounted(() => {
+  returnFocus = document.activeElement
+  nextTick(() => dialog.value?.querySelector('.close')?.focus())
+  load()
+})
+onBeforeUnmount(() => {
+  request++
+  const previous = returnFocus
+  nextTick(() => { if (previous?.isConnected) previous.focus() })
+})
 </script>
 
 <template>
   <div class="dialog-backdrop pattern-backdrop" @click.self="emit('close')">
-    <section class="dialog pattern-dialog" role="dialog" aria-modal="true" :aria-label="`${stock.name}形态证据`" @keydown.esc="emit('close')">
+    <section ref="dialog" class="dialog pattern-dialog" role="dialog" aria-modal="true" :aria-label="`${stock.name}形态证据`" @keydown="onDialogKeydown">
       <button class="close" @click="emit('close')">关闭</button>
       <span class="eyebrow">PATTERN EVIDENCE · {{ day }}</span><h2>{{ stock.name }} {{ stock.code }}</h2>
       <p class="footnote">{{ frozen ? '只读快照 · 仅展示已保存的逐根图' : '本地前复权日 K · 截止报告日' }} · 价格形态不是买卖或 Level‑2 吸筹确认。</p>

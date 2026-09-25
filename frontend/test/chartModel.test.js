@@ -1,6 +1,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { buildChartModel, minuteDrawdownText } from '../src/chartModel.js'
+import { buildChartModel, minuteBarReturnText, minuteDrawdownText } from '../src/chartModel.js'
+
+test('minute selected bar reports change from previous close without filling unknown baseline', () => {
+  assert.equal(minuteBarReturnText([0, 10, 10, 10, 10.5], 10), '较昨收 +5.00%')
+  assert.equal(minuteBarReturnText([0, 10, 10, 10, 9.5], 10), '较昨收 -5.00%')
+  assert.equal(minuteBarReturnText([0, 10, 10, 10, 10.0001], 10), '较昨收 +0.0010%')
+  assert.equal(minuteBarReturnText([0, 10, 10, 10, 10], null), '相对昨收未知')
+})
 
 test('minute zero axis remains vertically centered around previous close', () => {
   const model = buildChartModel({ labels: ['09:31', '09:32'], preClose: 10, bars: [[0, 10, 13, 9, 12, 100, 120000]] }, 'minute')

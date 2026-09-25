@@ -1,5 +1,6 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { useEvidencePending } from '../evidencePending.js'
 import { startValidation, stateMeta, validationDetail, validationStatus } from '../api.js'
 import { cohortName, findStockCode, formatPct, mixedSourceWarning, ruleName, sessionDefaults, sourcePair, sourceStrata, viewRows } from '../validationModel.js'
 
@@ -20,6 +21,7 @@ const lookup = ref('')
 const selectedCode = ref('')
 const detailByCode = ref(props.frozen ? props.savedDetails : {})
 const detailBusy = ref(false)
+useEvidencePending(computed(() => pending.value || detailBusy.value))
 const detailStatus = ref(props.frozen ? Object.keys(props.savedDetails).length ? '仅可查看快照已保存的个股' : '此快照未保存逐股后续证据' : '搜索代码或名称，按需读取该股的事件与后续结果')
 const names = computed(() => Object.fromEntries(props.cards.map(card => [card.code, card.name])))
 const matches = computed(() => {

@@ -1,7 +1,7 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
 import { dates, report, reportStatus, saveSnapshot, snapshot, snapshots, startReportBuild, stateMeta } from './api.js'
-import { adjacentTradingDay, describeDateStatus, initialReportDay } from './tradingDays.js'
+import { adjacentTradingDay, describeDateStatus, initialReportDay, observationWindow } from './tradingDays.js'
 import { normalizeCandidateFilters } from './candidateFilters.js'
 import MarketTimeline from './components/MarketTimeline.vue'
 import QualitySummary from './components/QualitySummary.vue'
@@ -16,6 +16,9 @@ const targetDay = ref(selectedDay.value)
 const snapshotId = ref(params.get('snapshot') || '')
 const dateRows = ref([])
 const tradingDays = ref([])
+const defaultWindow = ref(3)
+const maxWindow = ref(60)
+const stagedWindow = ref(null)
 const saved = ref([])
 const document = ref(null)
 const busy = ref(false)
@@ -38,6 +41,14 @@ const patternCodes = ref([])
 const patternUI = ref({ tab: 'review' })
 const validationReceipt = ref('')
 const validationCodes = ref([])
+const pendingEvidence = ref(new Set())
+provide('setEvidencePending', (token, active) => {
+  if (pendingEvidence.value.has(token) === active) return
+  const next = new Set(pendingEvidence.value)
+  if (active) next.add(token)
+  else next.delete(token)
+  pendingEvidence.value = next
+})
 let request = 0
 let buildRequest = 0
 let buildTimer = null
@@ -53,6 +64,17 @@ const nextDay = computed(() => adjacentTradingDay(tradingDays.value, document.va
 const money = value => value == null ? '未知' : `${(value / 1e8).toFixed(2)} 亿`
 const stateLevels = computed(() => Object.fromEntries((activeStateView.value?.stocks || []).map(stock => [stock.code, stock.level])))
 watch(activeTab, tab => { patternUI.value = { ...patternUI.value, tab } })
+function onResearchTabKeydown(event) {
+  const tabs = ['review', 'patterns', 'validation']
+  const position = tabs.indexOf(activeTab.value)
+  const next = event.key === 'ArrowRight' ? (position + 1) % tabs.length
+    : event.key === 'ArrowLeft' ? (position - 1 + tabs.length) % tabs.length
+      : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : -1
+  if (next < 0) return
+  event.preventDefault()
+  activeTab.value = tabs[next]
+  event.currentTarget.querySelectorAll('[role="tab"]')[next]?.focus()
+}
 
 async function load({ day = selectedDay.value, key = snapshotId.value } = {}) {
   const id = ++request
@@ -65,12 +87,13 @@ async function load({ day = selectedDay.value, key = snapshotId.value } = {}) {
     snapshotId.value = key
     selectedDay.value = result.day
     targetDay.value = result.day
-    history.replaceState(null, '', key ? `/?snapshot=${encodeURIComponent(key)}` : `/?date=${encodeURIComponent(result.day)}`)
+    history.replaceState(null, '', key ? `/?snapshot=${encodeURIComponent(key)}` : `/?date=${encodeURIComponent(result.day)}&window=${stagedWindow.value}`)
     failedLoad = null
     chartReceipts.value = {}
     stateReceipts.value = {}
     loadedDetails.value = {}
     stateWindow.value = result.mode === 'snapshot' ? result.stateWindow ?? null : null
+    if (result.mode === 'snapshot' && result.stateWindow != null) stagedWindow.value = result.stateWindow
     continuousUI.value = result.continuousUI || {}
     activeStateView.value = result.mode === 'snapshot' && result.stateWindow != null ? result.stateViews?.[String(result.stateWindow)] || null : null
     filters.value = normalizeCandidateFilters(result.filters)
@@ -171,6 +194,13 @@ function captureAppliedState({ window, view }) {
   stateWindow.value = view ? window : null
 }
 function captureContinuousUI(ui) { continuousUI.value = ui }
+function captureStagedWindow(value) {
+  const number = Number(value)
+  if (Number.isInteger(number) && number >= 1 && number <= maxWindow.value) {
+    stagedWindow.value = number
+    if (!snapshotId.value && document.value) history.replaceState(null, '', `/?date=${encodeURIComponent(document.value.day)}&window=${number}`)
+  }
+}
 function captureDetail(result) { loadedDetails.value = { ...loadedDetails.value, [result.code]: result } }
 function capturePattern(receipt) { patternReceipt.value = receipt; patternCodes.value = [] }
 function capturePatternDetail(code) { if (!patternCodes.value.includes(code) && patternCodes.value.length < 200) patternCodes.value = [...patternCodes.value, code] }
@@ -179,6 +209,10 @@ function captureValidation({ receipt }) { validationReceipt.value = receipt; val
 function captureValidationDetail(code) { if (!validationCodes.value.includes(code) && validationCodes.value.length < 50) validationCodes.value = [...validationCodes.value, code] }
 async function save() {
   if (!document.value || document.value.mode === 'snapshot' || saving.value) return
+  if (busy.value || buildBusy.value || pendingEvidence.value.size) {
+    saveMessage.value = `仍有 ${pendingEvidence.value.size} 项图表或证据正在读取／计算，请完成后再保存；当前报告未冻结。`
+    return
+  }
   saving.value = true
   saveMessage.value = '正在冻结当前已读取的证据；未加载的图表、深查和窗口不会补算…'
   try {
@@ -208,18 +242,27 @@ function openSaved() {
 }
 
 onMounted(async () => {
-  const [dateList, snapshotList, calendar] = await Promise.allSettled([dates(), snapshots(), stateMeta()])
-  if (dateList.status === 'fulfilled') dateRows.value = dateList.value
-  if (snapshotList.status === 'fulfilled') saved.value = snapshotList.value
-  if (calendar.status === 'fulfilled') tradingDays.value = calendar.value.days || []
-  if (!snapshotId.value && !params.has('date')) {
-    selectedDay.value = initialReportDay(dateRows.value)
-    targetDay.value = selectedDay.value
-  }
-  if (snapshotId.value || selectedDay.value) await load()
-  else error.value = dateList.status === 'rejected'
-    ? `本地日期读取失败：${dateList.reason?.message || '请检查服务和数据路径'}`
-    : '本地尚无可识别的 Level-2 日期；请检查数据路径与正式文件。'
+  const explicitSelection = Boolean(snapshotId.value || selectedDay.value)
+  const dateRequest = dates().then(rows => { dateRows.value = rows; return rows }).catch(cause => {
+    if (explicitSelection) buildMessage.value = `日期列表读取失败：${cause.message}；当前报告仍可查看。`
+    else error.value = `本地日期读取失败：${cause.message || '请检查服务和数据路径'}`
+    return null
+  })
+  void snapshots().then(rows => { saved.value = rows }).catch(() => { /* 快照列表不阻塞报告 */ })
+  try {
+    const meta = await stateMeta()
+    tradingDays.value = meta.days || []
+    maxWindow.value = Number.isInteger(meta.maxWindow) && meta.maxWindow > 0 ? meta.maxWindow : 60
+    defaultWindow.value = observationWindow(meta.defaultWindow, 3, maxWindow.value)
+  } catch { /* 报告仍可查看；观察窗口采用界面保守默认值 */ }
+  stagedWindow.value = observationWindow(params.get('window'), defaultWindow.value, maxWindow.value)
+  if (explicitSelection) { await load(); return }
+  const rows = await dateRequest
+  if (!rows) return
+  selectedDay.value = initialReportDay(rows)
+  targetDay.value = selectedDay.value
+  if (selectedDay.value) await load()
+  else error.value = '本地尚无可识别的 Level-2 日期；请检查数据路径与正式文件。'
 })
 onBeforeUnmount(() => { buildRequest++; clearTimeout(buildTimer) })
 </script>
@@ -235,7 +278,7 @@ onBeforeUnmount(() => { buildRequest++; clearTimeout(buildTimer) })
       <label>报告日期<select v-model="targetDay" :disabled="Boolean(snapshotId) || buildBusy" @change="buildMessage = ''"><option v-if="snapshotId || !dateRows.some(row => row.day === targetDay)" :value="targetDay">{{ targetDay }}{{ snapshotId ? ' · 快照证据日' : ' · 来源未列出' }}</option><option v-if="!snapshotId" v-for="row in dateRows" :key="row.day" :value="row.day">{{ row.day }} · {{ row.status === 'ready' ? '可查看' : row.status === 'stale' ? '待更新' : '待计算' }}</option></select></label>
       <button v-if="!snapshotId" class="save-button" :disabled="buildBusy || sourceStatus?.status !== 'ready' || targetDay === document?.day" @click="chooseDay">查看所选日期</button>
       <button v-if="!snapshotId" class="save-button secondary" :disabled="buildBusy || !sourceStatus?.canBuild || sourceStatus?.status === 'ready'" @click="buildSelectedDay">{{ buildBusy ? '计算中…' : '计算所选日期' }}</button>
-      <label>历史快照<select :value="snapshotId" @change="chooseSnapshot"><option value="">最新数据</option><option v-for="item in saved" :key="item.id" :value="item.id">{{ item.day }} · {{ new Date(item.savedAt).toLocaleString() }}</option></select></label>
+      <label>历史快照<select :value="snapshotId" @change="chooseSnapshot"><option value="">最新数据</option><option v-for="item in saved" :key="item.id" :value="item.id">{{ item.day }} · {{ new Date(item.savedAt).toLocaleString() }} · {{ item.chartCount ?? '未知' }} 张图</option></select></label>
       <button v-if="snapshotId" class="save-button secondary" :disabled="busy" @click="returnLive">返回最新数据</button>
       <button v-if="document?.mode === 'live'" class="save-button" :disabled="saving" @click="save">{{ saving ? '保存中…' : '保存当前证据快照' }}</button>
     </nav>
@@ -250,6 +293,7 @@ onBeforeUnmount(() => { buildRequest++; clearTimeout(buildTimer) })
     </div>
     <template v-if="document">
       <p class="scope">证据日期 {{ document.day }} · {{ document.mode === 'snapshot' ? '保存时冻结结果' : '来源校验后的本地结果' }} · 非吸筹或交易确认</p>
+      <p v-if="document.mode === 'snapshot'" class="scope">快照保存于 {{ document.savedAt ? new Date(document.savedAt).toLocaleString() : '时间未保存' }} · 冻结 {{ Object.keys(document.charts || {}).length }} 张已加载图表；未保存的图表、深查和窗口不会读取最新文件补齐。</p>
       <aside class="method-alert" aria-label="关键计算口径"><strong>口径提醒</strong><span>报告收盘价取数值时钟最后正价快照；同刻重复仍需质量核验，闭市值不解释为可交易时点。十档买／卖是 14:57 前连续竞价末档逐列显示量合计，缺档可能低估，不代表全日承接。主动净额不是持仓变化；上涨伴净卖出不直接确认派发。</span></aside>
       <div class="metrics" v-if="current">
         <div class="metric"><span>覆盖 A 股</span><strong>{{ current.stocks?.toLocaleString() ?? '未知' }}</strong></div>
@@ -257,8 +301,8 @@ onBeforeUnmount(() => { buildRequest++; clearTimeout(buildTimer) })
         <div class="metric"><span>主动净额</span><strong :class="current.net == null ? '' : current.net > 0 ? 'positive' : 'negative'">{{ money(current.net) }}</strong></div>
         <div class="metric"><span>上涨 / 下跌</span><strong>{{ current.up ?? '未知' }} / {{ current.down ?? '未知' }}</strong></div>
       </div>
-      <nav class="research-tabs" role="tablist" aria-label="研究视图"><button role="tab" :aria-selected="activeTab === 'review'" aria-controls="review-panel" @click="activeTab = 'review'">Level‑2 复盘</button><button role="tab" :aria-selected="activeTab === 'patterns'" aria-controls="patterns-panel" @click="activeTab = 'patterns'">个股形态</button><button role="tab" :aria-selected="activeTab === 'validation'" aria-controls="validation-panel" @click="activeTab = 'validation'">后续验证</button></nav>
-      <div id="review-panel" role="tabpanel" v-show="activeTab === 'review'"><QualitySummary :quality="document.report.quality" :gate="document.report.gate" /><MarketTimeline :markets="document.report.markets" :quality-available="Boolean(document.report.quality)" /><ContinuousPanel :key="panelKey" :day="document.day" :cards="document.report.cards" :frozen="document.mode === 'snapshot'" :previous-day="previousDay" :next-day="nextDay" :snapshot-views="document.stateViews || {}" :snapshot-window="document.stateWindow" :snapshot-charts="document.charts || {}" :initial-ui="continuousUI" @navigate-day="moveTradingDay" @chart-loaded="captureChart" @state-loaded="captureState" @view-applied="captureAppliedState" @ui-change="captureContinuousUI" /><CandidatePanel :key="panelKey" :cards="document.report.cards" :lists="document.report.lists || {}" :day="document.day" :frozen="document.mode === 'snapshot'" :snapshot-charts="document.charts || {}" :initial-filters="filters" :state-view="activeStateView" @chart-loaded="captureChart" @detail-loaded="captureDetail" @filters-change="filters = $event" /></div>
+      <nav class="research-tabs" role="tablist" aria-label="研究视图" @keydown="onResearchTabKeydown"><button role="tab" :aria-selected="activeTab === 'review'" :tabindex="activeTab === 'review' ? 0 : -1" aria-controls="review-panel" @click="activeTab = 'review'">Level‑2 复盘</button><button role="tab" :aria-selected="activeTab === 'patterns'" :tabindex="activeTab === 'patterns' ? 0 : -1" aria-controls="patterns-panel" @click="activeTab = 'patterns'">个股形态</button><button role="tab" :aria-selected="activeTab === 'validation'" :tabindex="activeTab === 'validation' ? 0 : -1" aria-controls="validation-panel" @click="activeTab = 'validation'">后续验证</button></nav>
+      <div id="review-panel" role="tabpanel" v-show="activeTab === 'review'"><QualitySummary :quality="document.report.quality" :gate="document.report.gate" /><MarketTimeline :markets="document.report.markets" :quality-available="Boolean(document.report.quality)" /><ContinuousPanel :key="panelKey" :day="document.day" :cards="document.report.cards" :frozen="document.mode === 'snapshot'" :previous-day="previousDay" :next-day="nextDay" :snapshot-views="document.stateViews || {}" :snapshot-window="document.stateWindow" :snapshot-charts="document.charts || {}" :initial-window="stagedWindow || defaultWindow" :max-window="maxWindow" :initial-ui="continuousUI" @navigate-day="moveTradingDay" @window-staged="captureStagedWindow" @chart-loaded="captureChart" @state-loaded="captureState" @view-applied="captureAppliedState" @ui-change="captureContinuousUI" /><CandidatePanel :key="panelKey" :cards="document.report.cards" :lists="document.report.lists || {}" :day="document.day" :frozen="document.mode === 'snapshot'" :snapshot-charts="document.charts || {}" :initial-filters="filters" :state-view="activeStateView" @chart-loaded="captureChart" @detail-loaded="captureDetail" @filters-change="filters = $event" /></div>
       <div id="patterns-panel" role="tabpanel" v-show="activeTab === 'patterns'"><PatternPanel :key="panelKey" :day="document.day" :frozen="document.mode === 'snapshot'" :snapshot-patterns="document.patterns || null" :snapshot-charts="document.charts || {}" :initial-ui="document.patternUI || {}" :levels="stateLevels" :state-window="stateWindow" @chart-loaded="captureChart" @pattern-loaded="capturePattern" @detail-loaded="capturePatternDetail" @ui-change="capturePatternUI" /></div>
       <div id="validation-panel" role="tabpanel" v-show="activeTab === 'validation'"><ValidationPanel :key="panelKey" :day="document.day" :cards="document.report.cards" :frozen="document.mode === 'snapshot'" :saved="document.validation || null" :saved-details="document.validationDetails || {}" @loaded="captureValidation" @detail-loaded="captureValidationDetail" /></div>
       <section class="panel migration-note" aria-labelledby="boundary-title"><div class="section-heading"><div><span class="eyebrow">EVIDENCE BOUNDARY</span><h2 id="boundary-title">证据、反证与未知</h2></div></div><div class="quality-grid"><div class="subpanel"><strong>已展示的证据</strong><p>7 交易日日级轨迹、目标日质量报告与全库候选；已计算的连续窗口、单股盘中／盘口深查、图表、形态和后续观察按各自来源与覆盖展示。快照只读取保存时冻结的结果。</p></div><div class="subpanel"><strong>仍不能确认</strong><p>委托类型码、撤补单与成交队列身份、主动成交的因果价格冲击、可执行支撑及吸筹／派发意图。价格与资金背离是待核验现象，不是单独的买卖触发。</p></div></div><p>收盘后可识别事件的后续收盘收益，不等于可成交、成本后的策略收益；参数外推、排队成交和交易授权仍未验收。</p></section>

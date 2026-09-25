@@ -2,6 +2,8 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { startState, stateView } from '../api.js'
 import { filterContinuousStocks, parseAdvancedFilters } from '../continuousFilters.js'
+import { flowNarrative, observedTransitions } from '../continuousEvidence.js'
+import { useEvidencePending } from '../evidencePending.js'
 import KlineTrigger from './KlineTrigger.vue'
 import StateEventPanel from './StateEventPanel.vue'
 
@@ -9,15 +11,18 @@ const props = defineProps({
   day: { type: String, required: true }, cards: { type: Array, required: true },
   frozen: { type: Boolean, default: false }, snapshotViews: { type: Object, default: () => ({}) },
   snapshotWindow: { type: Number, default: null },
+  initialWindow: { type: Number, default: 3 }, maxWindow: { type: Number, default: 60 },
   snapshotCharts: { type: Object, default: () => ({}) },
   previousDay: { type: String, default: null }, nextDay: { type: String, default: null },
   initialUi: { type: Object, default: () => ({}) },
 })
-const emit = defineEmits(['chart-loaded', 'state-loaded', 'view-applied', 'navigate-day', 'ui-change'])
-const windowDays = ref(props.snapshotWindow || 3)
+const emit = defineEmits(['chart-loaded', 'state-loaded', 'view-applied', 'navigate-day', 'window-staged', 'ui-change'])
+const windowDays = ref(props.snapshotWindow || props.initialWindow)
 const document = ref(props.frozen ? props.snapshotViews[String(windowDays.value)] || null : null)
 const status = ref(props.frozen ? document.value ? '只读：展示保存时的连续状态' : '此快照未保存所选窗口的连续状态' : '选择交易日窗口后计算；不自动扫描原始 Level-2')
 const pending = ref(false)
+const reading = ref(false)
+useEvidencePending(computed(() => pending.value || reading.value))
 const query = ref(props.initialUi.search || '')
 const change = ref(props.initialUi.change || 'all')
 const continuity = ref(props.initialUi.continuity || 'all')
@@ -35,6 +40,7 @@ let sequence = 0
 let timer = null
 const view = computed(() => document.value?.view || document.value)
 const names = computed(() => Object.fromEntries(props.cards.map(card => [card.code, card.name])))
+const directionComplete = computed(() => (view.value?.stocks || []).filter(stock => stock.valid === stock.expected).length)
 const filtered = computed(() => advanced.value.error ? [] : filterContinuousStocks(view.value?.stocks || [], names.value, {
   query: query.value, change: change.value, continuity: continuity.value, coverage: coverage.value,
   sort: sort.value, direction: sortDirection.value, advanced: advanced.value.filters,
@@ -69,6 +75,7 @@ const label = { improve: '↑ 改善', worsen: '↓ 恶化', flat: '→ 持平',
 function resetFilter(value) { change.value = value; page.value = 1 }
 function stageWindow(value) {
   windowDays.value = value
+  emit('window-staged', value)
   status.value = `待应用 ${value} 个交易日；${view.value ? `当前仍展示 ${view.value.window} 日结果` : '尚无已应用结果'}`
 }
 function clearFilters() {
@@ -93,7 +100,7 @@ const peerText = (stock, prefix) => stock[`${prefix}Group`] === undefined ? '未
 
 async function apply() {
   const days = Number(windowDays.value)
-  if (!Number.isInteger(days) || days < 1 || days > 60) { status.value = '窗口必须是 1 至 60 个交易日'; return }
+  if (!Number.isInteger(days) || days < 1 || days > props.maxWindow) { status.value = `窗口必须是 1 至 ${props.maxWindow} 个交易日`; return }
   if (props.frozen) {
     const saved = props.snapshotViews[String(days)]
     if (!saved) {
@@ -123,6 +130,7 @@ async function poll(id, days) {
   if (response.status === 'done') {
     document.value = response
     pending.value = false
+    reading.value = false
     page.value = 1
     status.value = `已计算 ${days} 个交易日；共同方向样本 ${response.view.common}/${response.view.total} 只`
     if (response.receipt) emit('state-loaded', { window: days, receipt: response.receipt })
@@ -130,10 +138,11 @@ async function poll(id, days) {
   } else if (response.status === 'queued' || response.status === 'running') {
     status.value = `${response.message}；${view.value ? '仍展示上次结果' : '暂无结果'}`
     timer = setTimeout(() => poll(id, days).catch(error => {
-      if (id === sequence) { pending.value = false; status.value = `读取失败：${error.message}；仍保留上次结果` }
+      if (id === sequence) { pending.value = false; reading.value = false; status.value = `读取失败：${error.message}；仍保留上次结果` }
     }), 1500)
   } else {
     pending.value = false
+    reading.value = false
     status.value = `${response.message || response.status}；${view.value ? '仍展示上次结果' : '暂无结果'}`
   }
 }
@@ -141,7 +150,9 @@ onMounted(() => {
   if (props.frozen) return
   // Reuse an already-calculated default window without starting a raw-data scan.
   status.value = `正在读取已有的 ${windowDays.value} 日连续状态；不会自动发起原始 Level-2 计算`
+  reading.value = true
   poll(++sequence, Number(windowDays.value)).catch(error => {
+    reading.value = false
     status.value = `已有状态读取失败：${error.message}；可手动应用观察窗口重试`
   })
 })
@@ -151,7 +162,7 @@ onBeforeUnmount(() => { sequence++; clearTimeout(timer) })
 <template>
   <section class="panel" aria-labelledby="continuous-title">
     <div class="section-heading"><div><span class="eyebrow">DAILY EVIDENCE</span><h2 id="continuous-title">连续观察</h2></div><span class="hint">水平、变化、持续性分开观察</span></div>
-    <div class="state-controls"><button :disabled="frozen || !previousDay" :title="previousDay || '无前一交易日'" @click="emit('navigate-day', -1)">前一交易日</button><span>截止 {{ day }}</span><button :disabled="frozen || !nextDay" :title="nextDay || '无后一交易日'" @click="emit('navigate-day', 1)">后一交易日</button><label>回看交易日<input v-model.number="windowDays" type="number" min="1" max="60" step="1" @input="stageWindow(windowDays)" /></label><button aria-label="减少一个交易日" :disabled="windowDays <= 1" @click="stageWindow(Math.max(1, Number(windowDays || 1) - 1))">−1</button><button aria-label="增加一个交易日" :disabled="windowDays >= 60" @click="stageWindow(Math.min(60, Number(windowDays || 1) + 1))">+1</button><button v-for="quick in [3,5,20]" :key="quick" @click="stageWindow(quick)">{{ quick }} 日</button><button class="primary" :disabled="pending" @click="apply">{{ frozen ? '查看已保存窗口' : pending ? '计算中…' : '应用观察窗口' }}</button></div>
+    <div class="state-controls"><button :disabled="frozen || !previousDay" :title="previousDay || '无前一交易日'" @click="emit('navigate-day', -1)">前一交易日</button><span>截止 {{ day }}</span><button :disabled="frozen || !nextDay" :title="nextDay || '无后一交易日'" @click="emit('navigate-day', 1)">后一交易日</button><label>回看交易日<input v-model.number="windowDays" type="number" min="1" :max="maxWindow" step="1" @input="stageWindow(windowDays)" /></label><button aria-label="减少一个交易日" :disabled="windowDays <= 1" @click="stageWindow(Math.max(1, Number(windowDays || 1) - 1))">−1</button><button aria-label="增加一个交易日" :disabled="windowDays >= maxWindow" @click="stageWindow(Math.min(maxWindow, Number(windowDays || 1) + 1))">+1</button><button v-for="quick in [3,5,20]" :key="quick" :disabled="quick > maxWindow" @click="stageWindow(quick)">{{ quick }} 日</button><button class="primary" :disabled="pending" @click="apply">{{ frozen ? '查看已保存窗口' : pending ? '计算中…' : '应用观察窗口' }}</button></div>
     <p class="footnote" role="status">{{ status }}</p>
     <template v-if="view">
       <p class="footnote">{{ view.dates[0] || '未知' }} — {{ view.dates.at(-1) || '未知' }}；共同方向样本 {{ view.common }} / {{ view.total }} 只。重叠窗口不是独立确认，未知不补零。</p>
@@ -174,9 +185,11 @@ onBeforeUnmount(() => { sequence++; clearTimeout(timer) })
       <div class="state-list-head"><h3>个股逐日证据</h3><div class="state-stock-filters"><label>搜索<input v-model="query" placeholder="代码或名称" aria-label="连续状态股票搜索" /></label><label>资金变化<select v-model="change" :disabled="!view.applicable" aria-label="资金变化筛选"><option value="all">全部变化</option><option v-for="key in ['improve','worsen','flat','unknown']" :key="key" :value="key">{{ label[key] }}</option></select></label><label>连续性<select v-model="continuity" aria-label="连续性覆盖筛选"><option value="all">全部</option><option value="known">可判定</option><option value="unknown">未知</option></select></label><label>方向覆盖<select v-model="coverage" aria-label="方向覆盖筛选"><option value="all">全部</option><option value="full">窗口完整</option><option value="partial">部分或缺失</option><option value="unknown">当前方向未知</option></select></label><label>排序指标<select v-model="sort" aria-label="连续状态排序指标"><option value="code">股票代码</option><option value="level">当前净额比 %</option><option value="delta">较前日变化 pp</option><option value="weighted">窗口加权净额比 %</option><option value="slope" :disabled="!view.applicable">窗口斜率 pp/日</option><option value="streak">可观察同向日数</option><option value="improve" :disabled="!view.applicable">连续改善次数</option><option value="amount">最新成交额 元</option><option value="amountRelative" :disabled="view.window <= 1 || !view.stocks?.some(stock => stock.amountRelativePct !== undefined)">最新成交额相对窗口前段 %</option><option value="sizePeer" :disabled="!view.peers || view.peers.status !== 'AVAILABLE'">市值组净额比分位</option><option value="liquidityPeer" :disabled="!view.peers">成交额组净额比分位</option><option value="price">区间涨跌幅 %</option><option value="drawdown">窗口最大收盘回撤 %</option><option value="minuteDrawdown" :disabled="!view.minuteObserved">窗口已观测分钟收盘回撤 %</option><option value="relative" :disabled="view.benchmark?.status !== 'AVAILABLE'">相对基准收益 pp</option></select></label><label>方向<select v-model="sortDirection" aria-label="连续状态排序方向"><option value="asc">正序 · 小→大</option><option value="desc">倒序 · 大→小</option></select></label></div></div>
       <div class="advanced-filters subpanel"><div class="state-stock-filters"><label>组合预设<select v-model="advancedRaw.preset"><option value="all">不限</option><option value="relief">卖压减轻</option><option value="buyStrong">买方增强</option><option value="buyWeak">买方减弱</option><option value="sellStrong">卖方增强</option><option value="upSell">价涨 · 窗口净卖出</option><option value="downBuy">价跌 · 窗口净买入</option></select></label><label>区间价格方向<select v-model="advancedRaw.price"><option value="all">不限</option><option value="positive">上涨</option><option value="negative">下跌</option><option value="zero">平盘</option></select></label><label>当日成交额下限（亿）<input v-model="advancedRaw.amountMin" type="number" min="0" step="any" placeholder="不限" /></label><label>当日成交额上限（亿）<input v-model="advancedRaw.amountMax" type="number" min="0" step="any" placeholder="不限" /></label></div><details><summary>高级筛选 · 资金范围与持续性</summary><div class="state-stock-filters"><label>当前主动方向<select v-model="advancedRaw.levelSign"><option value="all">不限</option><option value="positive">净买入</option><option value="negative">净卖出</option><option value="zero">净额为零</option></select></label><label>窗口加权方向<select v-model="advancedRaw.weightedSign"><option value="all">不限</option><option value="positive">净买入</option><option value="negative">净卖出</option><option value="zero">净额为零</option></select></label><label>相邻两日方向转换<select v-model="advancedRaw.turn" :disabled="!view.applicable"><option value="all">不限</option><option value="toBuy">卖转买</option><option value="toSell">买转卖</option><option value="buy">持续买</option><option value="sell">持续卖</option></select></label><label>成交额较前日<select v-model="advancedRaw.volume"><option value="all">不限</option><option value="positive">放量</option><option value="negative">缩量</option><option value="zero">持平</option></select></label><template v-for="field in [['level','当前净额比（%）'],['delta','日变化（百分点）'],['weighted','窗口加权净额比（%）'],['price','区间涨跌幅（%）']]" :key="field[0]"><label>{{ field[1] }}下限<input v-model="advancedRaw[`${field[0]}Min`]" type="number" step="any" placeholder="不限" /></label><label>{{ field[1] }}上限<input v-model="advancedRaw[`${field[0]}Max`]" type="number" step="any" placeholder="不限" /></label></template><label>连续净买入至少几日<input v-model="advancedRaw.buyDays" type="number" min="1" step="1" placeholder="不限" /></label><label>连续净卖出至少几日<input v-model="advancedRaw.sellDays" type="number" min="1" step="1" placeholder="不限" /></label><label>连续改善至少几次<input v-model="advancedRaw.improveTimes" type="number" min="1" step="1" placeholder="不限" /></label><label>连续恶化至少几次<input v-model="advancedRaw.worsenTimes" type="number" min="1" step="1" placeholder="不限" /></label></div></details><p class="footnote" role="status">{{ advanced.error || '条件同时满足；未知值不通过数值筛选。' }}</p><button type="button" @click="clearFilters">清空全部筛选</button></div>
       <p class="footnote">已应用 {{ view.window }} 交易日（{{ view.dates[0] }}—{{ view.dates.at(-1) }}）· 匹配 {{ filtered.length }} 只 · 每页 20 只。成交活跃度＝最新日成交额 ÷ 窗口内此前 {{ Math.max(0, view.window - 1) }} 个交易日平均成交额－1；此前任一天缺成交额即不可比较。排序只改变展示，未知始终排最后、同值按代码升序；左截断天数为可观察下界。极端净额比还需核对成交额与流动性，不是交易确认。</p>
-      <div class="state-stocks"><article v-for="stock in shown" :key="stock.code" class="subpanel"><div class="state-stock-title"><strong>{{ names[stock.code] || '名称未知' }} <KlineTrigger :code="stock.code" :name="names[stock.code] || ''" :day="day" :frozen="frozen" :snapshot-charts="snapshotCharts" @loaded="emit('chart-loaded', $event)" /></strong><span>{{ view.applicable ? label[stock.change] : '单日观察' }}</span></div><p>区间价格 {{ number(stock.priceReturn) }} · 最大收盘回撤 {{ stock.maxCloseDrawdown === undefined ? "未保存" : number(stock.maxCloseDrawdown) }}<small v-if="stock.drawdownPeakDay && stock.drawdownTroughDay">（{{ stock.drawdownPeakDay }} → {{ stock.drawdownTroughDay }}）</small></p><p>窗口分钟收盘回撤 {{ minuteWindow(stock) }}</p><p>相对{{ view.benchmark?.name || '基准' }} {{ relative(stock) }}</p><p>当前净额比 <b :class="tone(stock.level)">{{ number(stock.level) }}</b></p><p>{{ view.applicable ? '日变化' : '较窗口外前日' }} {{ number(dailyDelta(stock), ' pp') }} · 窗口加权 {{ number(stock.weighted) }}</p><p>成交活跃度 {{ amountActivity(stock) }}<small v-if="stock.amountPriorMean != null"> · 前 {{ stock.expected - 1 }} 日均 {{ money(stock.amountPriorMean) }}</small><small v-else-if="stock.amountValid !== undefined"> · 成交额有效 {{ stock.amountValid }}/{{ stock.expected }} 日</small></p><p>市值 {{ stock.totalMv === undefined ? '未保存' : stock.totalMv == null ? '未知' : `${(stock.totalMv / 10000).toFixed(2)} 亿` }} · 市值组 {{ peerText(stock, 'size') }}</p><p>成交额组 {{ peerText(stock, 'liquidity') }}</p><p>窗口斜率 {{ view.window > 1 ? number(stock.slope, ' pp/日') : '不适用' }} · 连续改善 {{ improvement(stock) }}</p><small>方向有效 {{ stock.valid }}/{{ stock.expected }} 日 · 可观察同向 {{ persistence(stock) }}</small><details><summary>逐日证据</summary><p v-for="row in stock.history" :key="row.day">{{ row.day }} · 日涨跌 {{ view.priceState ? number(row.priceDailyReturn) : '未保存' }} · 成交额 {{ money(row.amount) }} · 净额比 {{ number(row.ratio) }} · {{ row.reason || '方向记录可用' }}</p></details></article></div>
+      <div class="state-stocks"><article v-for="stock in shown" :key="stock.code" class="subpanel"><div class="state-stock-title"><strong>{{ names[stock.code] || '名称未知' }} <KlineTrigger :code="stock.code" :name="names[stock.code] || ''" :day="day" :frozen="frozen" :snapshot-charts="snapshotCharts" @loaded="emit('chart-loaded', $event)" /></strong><span>{{ view.applicable ? label[stock.change] : '单日观察' }}</span></div><p>区间价格 {{ number(stock.priceReturn) }} · 最大收盘回撤 {{ stock.maxCloseDrawdown === undefined ? "未保存" : number(stock.maxCloseDrawdown) }}<small v-if="stock.drawdownPeakDay && stock.drawdownTroughDay">（{{ stock.drawdownPeakDay }} → {{ stock.drawdownTroughDay }}）</small></p><p>窗口分钟收盘回撤 {{ minuteWindow(stock) }}</p><p>相对{{ view.benchmark?.name || '基准' }} {{ relative(stock) }}</p><p>当前净额比 <b :class="tone(stock.level)">{{ number(stock.level) }}</b></p><p>{{ view.applicable ? '日变化' : '较窗口外前日' }} {{ number(dailyDelta(stock), ' pp') }} · 窗口加权 {{ number(stock.weighted) }}</p><p class="footnote">{{ flowNarrative(stock, view.applicable) }}</p><p>成交活跃度 {{ amountActivity(stock) }}<small v-if="stock.amountPriorMean != null"> · 前 {{ stock.expected - 1 }} 日均 {{ money(stock.amountPriorMean) }}</small><small v-else-if="stock.amountValid !== undefined"> · 成交额有效 {{ stock.amountValid }}/{{ stock.expected }} 日</small></p><p>市值 {{ stock.totalMv === undefined ? '未保存' : stock.totalMv == null ? '未知' : `${(stock.totalMv / 10000).toFixed(2)} 亿` }} · 市值组 {{ peerText(stock, 'size') }}</p><p>成交额组 {{ peerText(stock, 'liquidity') }}</p><p>窗口斜率 {{ view.window > 1 ? number(stock.slope, ' pp/日') : '不适用' }} · {{ observedTransitions(stock) }}</p><small>方向有效 {{ stock.valid }}/{{ stock.expected }} 日 · 成交额有效 {{ stock.amountValid ?? '未知' }}/{{ stock.expected }} 日 · 可观察同向 {{ persistence(stock) }}</small><details><summary>逐日证据</summary><p v-for="row in stock.history" :key="row.day">{{ row.day }} · 日涨跌 {{ view.priceState ? number(row.priceDailyReturn) : '未保存' }} · 成交额 {{ money(row.amount) }} · 净额比 {{ number(row.ratio) }} · {{ row.reason || '方向记录可用' }}</p></details></article></div>
       <p v-if="!filtered.length" class="footnote">当前组合无匹配股票；可放宽筛选，未知值不会按 0 纳入排序。</p>
       <div class="pagination"><button :disabled="page <= 1" @click="page--">上一页</button><span>{{ page }} / {{ pages }}</span><button :disabled="page >= pages" @click="page++">下一页</button></div>
+      <p class="footnote">覆盖说明：{{ view.total }} 只股票中，方向窗口完整 {{ directionComplete }} 只；其余 {{ view.total - directionComplete }} 只不足或方向未知。价格和成交额按各自覆盖独立展示。</p>
+      <details class="market-source-detail"><summary>详细计算口径与来源</summary><p>净额比＝共同方向样本主动净额合计 ÷ 同样本成交额合计；{{ view.method || '此结果未保存方法标识' }}。相邻日变化按原始精度比较，极小值不补零；持续次数被窗口左边界截断时显示“至少”。股票缺日、方向未知与价格缺失分别保留。</p><p>逐日源文件和方向校准状态见上方“市场资金状态”的源文件；价格取前复权收盘，历史当时可得性未验证。</p><p v-if="!document?.sources?.length">此结果未保存完整来源清单；不从当前文件回填。</p><p v-for="source in document?.sources || []" :key="`${source.day}-${source.source}`">{{ source.day }} · {{ sourceLabel[source.status] || source.status || '状态未知' }} · 成交 {{ source.source || '路径未知' }} · 价格 {{ source.priceSource || '路径未知' }}</p></details>
     </template>
   </section>
 </template>

@@ -1,6 +1,16 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { adjacentTradingDay, describeDateStatus, initialReportDay } from '../src/tradingDays.js'
+import { adjacentTradingDay, describeDateStatus, initialReportDay, observationWindow } from '../src/tradingDays.js'
+
+test('observation window accepts each day within configured metadata bounds', () => {
+  assert.equal(observationWindow('7', 3, 20), 7)
+  assert.equal(observationWindow('1', 3, 20), 1)
+  assert.equal(observationWindow(null, 5, 20), 5)
+  assert.equal(observationWindow('21', 5, 20), 5)
+  assert.equal(observationWindow('2.5', 5, 20), 5)
+  assert.equal(observationWindow('oops', 5, 20), 5)
+  assert.equal(observationWindow(null, 5, 2), 2)
+})
 
 test('adjacent navigation follows the verified calendar without skipping missing-report days', () => {
   const days = ['20260918', '20260921', '20260922', '20260923']
