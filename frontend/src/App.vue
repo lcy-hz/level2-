@@ -41,6 +41,7 @@ const validationCodes = ref([])
 let request = 0
 let buildRequest = 0
 let buildTimer = null
+let failedLoad = null
 
 const current = computed(() => document.value?.report?.markets?.at(-1) || null)
 // Key on the document that has finished loading, not the requested selection.
@@ -53,16 +54,19 @@ const money = value => value == null ? '未知' : `${(value / 1e8).toFixed(2)} �
 const stateLevels = computed(() => Object.fromEntries((activeStateView.value?.stocks || []).map(stock => [stock.code, stock.level])))
 watch(activeTab, tab => { patternUI.value = { ...patternUI.value, tab } })
 
-async function load() {
+async function load({ day = selectedDay.value, key = snapshotId.value } = {}) {
   const id = ++request
   busy.value = true
   error.value = ''
   try {
-    const result = snapshotId.value ? await snapshot(snapshotId.value) : await report(selectedDay.value)
+    const result = key ? await snapshot(key) : await report(day)
     if (id !== request) return
     document.value = result
+    snapshotId.value = key
     selectedDay.value = result.day
     targetDay.value = result.day
+    history.replaceState(null, '', key ? `/?snapshot=${encodeURIComponent(key)}` : `/?date=${encodeURIComponent(result.day)}`)
+    failedLoad = null
     chartReceipts.value = {}
     stateReceipts.value = {}
     loadedDetails.value = {}
@@ -79,22 +83,23 @@ async function load() {
     saveMessage.value = ''
     savedId.value = ''
   } catch (cause) {
-    if (id === request) error.value = cause.message
+    if (id === request) {
+      error.value = `${key ? '目标快照' : `报告 ${day}`} 读取失败：${cause.message}`
+      failedLoad = { day, key }
+    }
   } finally {
     if (id === request) busy.value = false
   }
 }
+function retryLoad() { return load(failedLoad || { day: selectedDay.value, key: snapshotId.value }) }
 
 function chooseDay() {
   if (sourceStatus.value?.status !== 'ready') {
     buildMessage.value = sourceStatus.value?.message || '此日期报告尚未就绪；请先计算报告。'
     return
   }
-  selectedDay.value = targetDay.value
-  snapshotId.value = ''
   buildMessage.value = ''
-  history.replaceState(null, '', `/?date=${encodeURIComponent(selectedDay.value)}`)
-  load()
+  load({ day: targetDay.value, key: '' })
 }
 
 function moveTradingDay(offset) {
@@ -107,15 +112,16 @@ function moveTradingDay(offset) {
 }
 
 function chooseSnapshot(event) {
-  if (!event.target.value) {
+  const key = event.target.value
+  // Keep the selector aligned with the evidence that is actually displayed.
+  event.target.value = snapshotId.value
+  if (!key) {
     const ready = dateRows.value.find(row => row.day === document.value?.day && row.status === 'ready') || dateRows.value.find(row => row.status === 'ready')
     if (!ready) { buildMessage.value = '没有可查看的最新报告；当前快照保持只读。'; return }
     targetDay.value = ready.day
     return chooseDay()
   }
-  snapshotId.value = event.target.value
-  history.replaceState(null, '', `/?snapshot=${encodeURIComponent(snapshotId.value)}`)
-  load()
+  load({ key })
 }
 
 async function buildSelectedDay() {
@@ -195,9 +201,7 @@ async function save() {
 }
 function openSaved() {
   if (!savedId.value) return
-  snapshotId.value = savedId.value
-  history.replaceState(null, '', `/?snapshot=${encodeURIComponent(savedId.value)}`)
-  load()
+  load({ key: savedId.value })
 }
 
 onMounted(async () => {
@@ -237,8 +241,8 @@ onBeforeUnmount(() => { buildRequest++; clearTimeout(buildTimer) })
 
     <div v-if="busy" class="notice" role="status">正在读取报告数据…</div>
     <div v-if="error" class="notice error" role="alert">
-      <strong>当前数据不可展示</strong><p>{{ error }}</p><p v-if="sourceStatus">{{ sourceStatus.message }}</p>
-      <button @click="load">重试读取</button>
+      <strong>{{ document ? '切换失败，仍显示此前证据' : '当前数据不可展示' }}</strong><p>{{ error }}</p><p v-if="sourceStatus">{{ sourceStatus.message }}</p>
+      <button @click="retryLoad">{{ document ? '重试切换' : '重试读取' }}</button>
     </div>
     <template v-if="document">
       <p class="scope">证据日期 {{ document.day }} · {{ document.mode === 'snapshot' ? '保存时冻结结果' : '来源校验后的本地结果' }} · 非吸筹或交易确认</p>
