@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { filterCandidates, normalizeCandidateFilters, priceDirection, stateNarrative, summarizeCandidatePools } from '../src/candidateFilters.js'
+import { filterCandidates, futureCloseChange, normalizeCandidateFilters, priceDirection, stateNarrative, summarizeCandidatePools } from '../src/candidateFilters.js'
 
 const rows = [
   { code: '000001.SZ', name: '甲', label: '主动', returnSign: 1, net: 10 },
@@ -13,6 +13,13 @@ test('candidate price direction distinguishes flat from missing evidence', () =>
   assert.equal(priceDirection(-1).text, '↓ 下跌')
   assert.equal(priceDirection(0).text, '— 平盘')
   assert.equal(priceDirection(null).text, '— 未知')
+})
+
+test('historical future close change keeps missing, zero and tiny moves distinct', () => {
+  assert.equal(futureCloseChange(null), '报告窗口内未观察')
+  assert.equal(futureCloseChange(0), '0.00%')
+  assert.equal(futureCloseChange(0.0001), '+1.00e-4%')
+  assert.equal(futureCloseChange(-1.25), '-1.25%')
 })
 
 test('historical snapshot filter labels restore without changing the frozen bundle', () => {

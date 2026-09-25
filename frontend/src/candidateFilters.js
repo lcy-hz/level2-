@@ -16,6 +16,11 @@ export function priceDirection(sign) {
   return { text: '— 未知', tone: 'unknown' }
 }
 
+export function futureCloseChange(value) {
+  if (!finite(value)) return '报告窗口内未观察'
+  return `${value > 0 ? '+' : ''}${value !== 0 && Math.abs(value) < .005 ? value.toExponential(2) : value.toFixed(2)}%`
+}
+
 // Historical HTML snapshots used the visible label for "all" and a different
 // sort-direction key. Normalize only the UI state; keep the frozen bundle intact.
 export function normalizeCandidateFilters(saved = {}) {
