@@ -12,6 +12,7 @@ import re
 
 import duckdb
 from level2_contract import native_ticks,KNOWN_NET,UNKNOWN_AMOUNT,COMPLETE_NET,parent_query
+from level2_quote_path import quote_path
 from level2_report_html import add_detail_controls
 
 BASE = Path(__file__).resolve().parent
@@ -37,10 +38,11 @@ def source_identity(day, root=SOURCE):
     content = json.loads(manifest.read_text())
     if content.get('commit_state') != 'COMMITTED':
         raise ValueError('源数据提交状态不是 COMMITTED')
-    files = [root / f'deal_{day}.parquet', root / f'order_raw_{day}.parquet', manifest, audit / 'COMMITTED']
+    files = [root / f'deal_{day}.parquet', root / f'snapshot_{day}.parquet', root / f'order_raw_{day}.parquet', manifest, audit / 'COMMITTED']
     identity = [(str(p.resolve()), p.stat().st_size, p.stat().st_mtime_ns) for p in files]
     identity.append(('calculator', hashlib.sha256(Path(__file__).read_bytes()).hexdigest()))
     identity.append(('contract',hashlib.sha256((BASE/'level2_contract.py').read_bytes()).hexdigest()))
+    identity.append(('quote_path',hashlib.sha256((BASE/'level2_quote_path.py').read_bytes()).hexdigest()))
     return hashlib.sha256(json.dumps(identity).encode()).hexdigest()
 
 
@@ -85,11 +87,18 @@ def calculate(code, day, expected, progress, root=SOURCE):
         if not rows or any(bad or bad_date for _, _, _, _, bad, bad_date in rows):
             raise ValueError('order_raw 为空或日期/数量异常，未发布不完整结果')
         orders = [{'t': t, 's': s, 'r': r, 'q': round(q)} for t, s, r, q, _, _ in rows]
+        progress('正在核对该股盘口快照的买卖一档中间价路径…')
+        snapshots = con.execute('''SELECT "自然日","时间","申买价1","申卖价1"
+            FROM read_parquet(?) WHERE "万得代码"=?''',
+            [str(root / f'snapshot_{day}.parquet'), code]).fetchall()
+        quotes = quote_path(snapshots, day)
+        quotes['source'] = str(root / f'snapshot_{day}.parquet')
         if before != source_identity(day, root):
             raise ValueError('计算期间源文件发生变化，请重新计算')
         return {'code': code, 'day': day, 'sourceIdentity': before,
                 'computedAt': datetime.now(timezone.utc).isoformat(),
                 'segments': segments, 'parents': parents, 'orders': orders,
+                'quotePath': quotes,
                 'regularCoverage': round(sum(r[1] for r in con.execute('''SELECT 1,SUM(price*qty) FROM ticks
                    WHERE (t BETWEEN 93000000 AND 113000000) OR (t BETWEEN 130000000 AND 150000000)''').fetchall() if r[1] is not None) / amount * 100, 2),
                 'tradeRows': count, 'amount': round(amount), 'net': round(net) if net is not None else None,

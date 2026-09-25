@@ -29,10 +29,16 @@ class DetailTests(unittest.TestCase):
         ], columns=['万得代码', '自然日', '时间', '成交价格', '成交数量', 'BS标志', '叫买序号', '叫卖序号'])
         orders = pd.DataFrame([['600000.SH', self.day, '0', 'B', '120']],
                               columns=['万得代码', '自然日', '委托类型', '委托代码', '委托数量'])
+        snapshots = pd.DataFrame([
+            ['600000.SH', self.day, '93000000', '99000', '101000'],
+            ['600000.SH', self.day, '95957000', '100000', '102000'],
+        ], columns=['万得代码', '自然日', '时间', '申买价1', '申卖价1'])
         con.register('trades_fixture', trades)
         con.register('orders_fixture', orders)
+        con.register('snapshots_fixture', snapshots)
         con.execute(f"COPY trades_fixture TO '{self.root}/deal_{self.day}.parquet' (FORMAT PARQUET)")
         con.execute(f"COPY orders_fixture TO '{self.root}/order_raw_{self.day}.parquet' (FORMAT PARQUET)")
+        con.execute(f"COPY snapshots_fixture TO '{self.root}/snapshot_{self.day}.parquet' (FORMAT PARQUET)")
         con.close()
         self.report = {'markets': [{'day': self.day}], 'cards': [self.expected]}
 
@@ -46,6 +52,8 @@ class DetailTests(unittest.TestCase):
         self.assertEqual(sum(r['n'] for r in result['parents']), 800)
         self.assertEqual(result['segments'][0]['a'], 1000)
         self.assertEqual(result['orders'][0]['r'], 1)
+        self.assertEqual(result['quotePath']['status'],'AVAILABLE')
+        self.assertAlmostEqual(result['quotePath']['segments'][0]['midChangePct'],1)
 
     def test_unknown_direction_is_not_zero(self):
         con=duckdb.connect();path=self.root/f'deal_{self.day}.parquet'
@@ -55,6 +63,12 @@ class DetailTests(unittest.TestCase):
         result=calculate('600000.SH',self.day,{'amount':1200,'net':None},lambda _:None,self.root)
         self.assertIsNone(result['net']);self.assertEqual(result['unknownAmount'],1000)
         self.assertEqual(result['knownNet'],-200);self.assertIsNone(result['segments'][0]['n'])
+
+    def test_snapshot_change_invalidates_detail_identity(self):
+        before=source_identity(self.day,self.root)
+        source=self.root/f'snapshot_{self.day}.parquet'
+        with source.open('ab') as stream:stream.write(b'changed')
+        self.assertNotEqual(before,source_identity(self.day,self.root))
 
     def test_cache_validation_and_allowlist(self):
         service = Service(self.report, self.root, self.root / 'cache')

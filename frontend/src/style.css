@@ -17,3 +17,4 @@
 .market-source-detail code{display:block;overflow-wrap:anywhere;font-size:10px;line-height:1.45}
 .price-state-strip{grid-template-columns:repeat(3,minmax(0,1fr))}.price-breadth-line{border-top:1px solid #2d465b;padding-top:7px}@media(max-width:620px){.price-state-strip{grid-template-columns:1fr}}
 .benchmark-evidence{display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;margin:10px 0}.benchmark-evidence p{margin:6px 0}.benchmark-evidence small{color:#a8bdcd}.benchmark-evidence details{min-width:0;max-width:100%}
+.quote-coverage{display:block;color:#9db9c8;font-size:11px;margin-top:3px}

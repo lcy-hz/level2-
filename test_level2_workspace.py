@@ -72,6 +72,8 @@ class WorkspaceTests(unittest.TestCase):
         detail={'code':'000001.SZ','day':'20260907','tradeRows':42,'amount':1000,'net':30,
                 'segments':[{'s':'09:30–10:00','a':1000,'n':30,'v':12.0}],
                 'parents':[{'b':'<5万','n':30,'c':2}], 'orders':[{'t':'0','s':'B','r':1,'q':100}],
+                'quotePath':{'status':'AVAILABLE','source':'/test/snapshot.parquet',
+                             'segments':[{'s':'09:30–10:00','midChangePct':.5,'valid':20,'observed':20}]},
                 'regularCoverage':100,'note':'测试中的完整深查证据'}
         self.service.status=lambda code:{'status':'done','result':detail}
         data=copy.deepcopy(self.data)
@@ -81,6 +83,7 @@ class WorkspaceTests(unittest.TestCase):
         saved=self.w.save({'day':'20260907','data':data})
         frozen=self.w.snapshot_document(saved['id'])['report']['cards'][0]['detailEvidence']
         self.assertEqual(frozen['tradeRows'],42)
+        self.assertEqual(frozen['quotePath']['segments'][0]['midChangePct'],.5)
         forged=copy.deepcopy(data);forged['cards'][0]['detailEvidence']['tradeRows']=999
         with self.assertRaisesRegex(ValueError,'完整深查证据'):
             self.w.save({'day':'20260907','data':forged})

@@ -10,6 +10,8 @@
 !/level2_report_html.py
 !/level2_detail_ui.html
 !/level2_intraday.py
+!/level2_quote_path.py
+!/test_level2_quote_path.py
 !/level2_kline.py
 !/level2_kline_ui.html
 !/level2_paths.py
