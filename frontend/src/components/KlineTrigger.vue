@@ -16,11 +16,14 @@ const result = ref(null)
 const status = ref('')
 const selected = ref(0)
 const position = ref({ left: '12px', top: '12px', maxHeight: 'calc(100vh - 24px)' })
+const portalTarget = ref('body')
 let active = null
 let sequence = 0
 let controller = null
 let hideTimer = null
 let departed = false
+let modal = null
+let suppressHover = false
 const model = computed(() => buildChartModel(result.value, kind.value))
 const selectedBar = computed(() => result.value?.bars?.[selected.value] || null)
 const selectedDate = computed(() => selectedBar.value ? result.value.labels[selectedBar.value[0]] : null)
@@ -40,20 +43,28 @@ async function place(element) {
   position.value = { left: `${Math.max(12, Math.min(bounds.left, innerWidth - width - 12))}px`, top: `${top}px`, maxHeight: `${Math.max(90, innerHeight - top - 12)}px` }
 }
 
-function close() {
+function close(suppressNextHover = true) {
   sequence++
   controller?.abort()
   controller = null
   clearTimeout(hideTimer)
+  suppressHover = Boolean(suppressNextHover)
+  modal?.removeEventListener('cancel', onModalCancel)
+  modal = null
   open.value = false
   pinned.value = false
   active = null
   departed = false
 }
+function onModalCancel(event) {
+  if (!open.value) return
+  event.preventDefault()
+  close()
+}
 function later() {
   clearTimeout(hideTimer)
   departed = true
-  if (!pinned.value) hideTimer = setTimeout(close, 180)
+  if (!pinned.value) hideTimer = setTimeout(() => close(false), 180)
 }
 function cancelHide() { clearTimeout(hideTimer); departed = false }
 async function show(nextKind, event, pin = false) {
@@ -69,6 +80,15 @@ async function show(nextKind, event, pin = false) {
   controller?.abort()
   const id = ++sequence
   active = element
+  // A native modal dialog lives in the browser top layer. A preview teleported
+  // to body would be hidden beneath it even with a large z-index.
+  const nextModal = element.closest('dialog[open]')
+  if (modal !== nextModal) {
+    modal?.removeEventListener('cancel', onModalCancel)
+    modal = nextModal
+    modal?.addEventListener('cancel', onModalCancel)
+  }
+  portalTarget.value = modal || 'body'
   kind.value = nextKind
   pinned.value = pin
   result.value = null
@@ -99,21 +119,34 @@ async function show(nextKind, event, pin = false) {
     await place(element)
   }
 }
-function hover(nextKind, event) { if (event.pointerType !== 'touch') show(nextKind, event) }
+function hover(nextKind, event) { if (event.pointerType !== 'touch' && !suppressHover) show(nextKind, event) }
+function triggerLeave() { suppressHover = false; later() }
+function focusPreview(nextKind, event) {
+  // A modal returns focus while handling Escape; auto-opening on that focus
+  // would immediately recreate the preview we just dismissed.
+  if (!event.currentTarget.closest('dialog[open]')) show(nextKind, event)
+}
 function inspect(step) { selected.value = Math.max(0, Math.min((result.value?.bars?.length || 1) - 1, selected.value + step)) }
 function onKey(event) {
-  if (event.key === 'Escape') close()
+  if (event.key === 'Escape' && open.value) {
+    // In a modal, its cancel event must be prevented before dismissing only
+    // the preview; stopping keydown alone does not stop native dialog close.
+    if (modal) return
+    event.preventDefault()
+    event.stopPropagation()
+    close()
+  }
 }
 onBeforeUnmount(close)
 </script>
 
 <template>
-  <span class="chart-trigger-group" @pointerleave="later" @focusout="later">
-    <button type="button" class="chart-code" :aria-controls="previewId" :aria-label="`${name} ${code} 前复权日 K 线`" title="悬浮查看前复权日 K；点击固定" @pointerenter="hover('day', $event)" @focus="show('day', $event)" @click.stop="show('day', $event, true)" @keydown="onKey">{{ code }}</button>
-    <button type="button" class="minute-trigger" :aria-controls="previewId" :aria-label="`${name} ${code} 当日分钟 K 线`" title="悬浮查看当日分钟 K；点击固定" @pointerenter="hover('minute', $event)" @focus="show('minute', $event)" @click.stop="show('minute', $event, true)" @keydown="onKey">分</button>
-    <Teleport to="body">
-      <section v-if="open" :id="previewId" class="chart-preview" :style="position" role="region" :aria-label="`${name} ${code} ${kind === 'minute' ? '分钟' : '日'} K 线预览`" @pointerenter="cancelHide" @pointerleave="later" @keydown.esc="close">
-        <header><div><strong>{{ name }} {{ code }} · {{ kind === 'minute' ? '当日 1 分钟 K' : '前复权日 K' }}</strong><small>{{ dayLabel(day) }} · {{ frozen ? '只读快照' : '每次悬浮重新读取本地文件' }}</small></div><button type="button" @click="close">关闭</button></header>
+  <span class="chart-trigger-group" @pointerleave="triggerLeave" @focusout="later">
+    <button type="button" class="chart-code" :aria-controls="previewId" :aria-label="`${name} ${code} 前复权日 K 线`" title="悬浮查看前复权日 K；点击固定" @pointerenter="hover('day', $event)" @focus="focusPreview('day', $event)" @click.stop="show('day', $event, true)" @keydown="onKey">{{ code }}</button>
+    <button type="button" class="minute-trigger" :aria-controls="previewId" :aria-label="`${name} ${code} 当日分钟 K 线`" title="悬浮查看当日分钟 K；点击固定" @pointerenter="hover('minute', $event)" @focus="focusPreview('minute', $event)" @click.stop="show('minute', $event, true)" @keydown="onKey">分</button>
+    <Teleport :to="portalTarget">
+      <section v-if="open" :id="previewId" class="chart-preview" :style="position" role="region" :aria-label="`${name} ${code} ${kind === 'minute' ? '分钟' : '日'} K 线预览`" @pointerenter="cancelHide" @pointerleave="later" @keydown.esc="onKey">
+        <header><div><strong>{{ name }} {{ code }} · {{ kind === 'minute' ? '当日 1 分钟 K' : '前复权日 K' }}</strong><small>{{ dayLabel(day) }} · {{ frozen ? '只读快照' : '每次悬浮重新读取本地文件' }}</small></div><button type="button" @click="close()">关闭</button></header>
         <p v-if="status" class="chart-status" role="status">{{ status }}</p>
         <template v-if="result && model.bars.length">
           <p class="chart-values" aria-live="polite">{{ dayLabel(selectedDate) }} · 开 {{ fmt(selectedBar[1]) }} 高 {{ fmt(selectedBar[2]) }} 低 {{ fmt(selectedBar[3]) }} 收 {{ fmt(selectedBar[4]) }} · 量 {{ selectedBar[5]?.toLocaleString() ?? '未知' }} 手 · 额 {{ money(selectedBar[6]) }}</p>
