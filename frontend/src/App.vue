@@ -28,6 +28,7 @@ const chartReceipts = ref({})
 const stateReceipts = ref({})
 const loadedDetails = ref({})
 const stateWindow = ref(null)
+const continuousUI = ref({})
 const filters = ref({ search: '', filter: 'all', direction: 'all', sort: 'default' })
 const activeTab = ref('review')
 const activeStateView = ref(null)
@@ -62,6 +63,7 @@ async function load() {
     stateReceipts.value = {}
     loadedDetails.value = {}
     stateWindow.value = result.mode === 'snapshot' ? result.stateWindow ?? null : null
+    continuousUI.value = result.continuousUI || {}
     activeStateView.value = result.mode === 'snapshot' && result.stateWindow != null ? result.stateViews?.[String(result.stateWindow)] || null : null
     filters.value = { search: '', filter: 'all', direction: 'all', sort: 'default', ...(result.filters || {}) }
     activeTab.value = ['patterns', 'validation'].includes(result.patternUI?.tab) ? result.patternUI.tab : 'review'
@@ -155,6 +157,7 @@ function captureAppliedState({ window, view }) {
   activeStateView.value = view
   stateWindow.value = view ? window : null
 }
+function captureContinuousUI(ui) { continuousUI.value = ui }
 function captureDetail(result) { loadedDetails.value = { ...loadedDetails.value, [result.code]: result } }
 function capturePattern(receipt) { patternReceipt.value = receipt; patternCodes.value = [] }
 function capturePatternDetail(code) { if (!patternCodes.value.includes(code) && patternCodes.value.length < 200) patternCodes.value = [...patternCodes.value, code] }
@@ -177,6 +180,7 @@ async function save() {
     }
     const savedSnapshot = await saveSnapshot({ day: document.value.day, data, charts: chartReceipts.value,
       states: stateReceipts.value, stateWindow: stateWindow.value, filters: filters.value,
+      continuousUI: continuousUI.value,
       patternReceipt: patternReceipt.value || null, patternCharts: patternCodes.value, patternUI: patternUI.value,
       validationReceipt: validationReceipt.value || null, validationDetails: validationCodes.value })
     savedId.value = savedSnapshot.id
@@ -234,7 +238,7 @@ onBeforeUnmount(() => { buildRequest++; clearTimeout(buildTimer) })
         <div class="metric"><span>上涨 / 下跌</span><strong>{{ current.up ?? '未知' }} / {{ current.down ?? '未知' }}</strong></div>
       </div>
       <nav class="research-tabs" role="tablist" aria-label="研究视图"><button role="tab" :aria-selected="activeTab === 'review'" aria-controls="review-panel" @click="activeTab = 'review'">Level‑2 复盘</button><button role="tab" :aria-selected="activeTab === 'patterns'" aria-controls="patterns-panel" @click="activeTab = 'patterns'">个股形态</button><button role="tab" :aria-selected="activeTab === 'validation'" aria-controls="validation-panel" @click="activeTab = 'validation'">后续验证</button></nav>
-      <div id="review-panel" role="tabpanel" v-show="activeTab === 'review'"><QualitySummary :quality="document.report.quality" :gate="document.report.gate" /><MarketTimeline :markets="document.report.markets" /><ContinuousPanel :key="document.mode + document.day" :day="document.day" :cards="document.report.cards" :frozen="document.mode === 'snapshot'" :previous-day="previousDay" :next-day="nextDay" :snapshot-views="document.stateViews || {}" :snapshot-window="document.stateWindow" :snapshot-charts="document.charts || {}" @navigate-day="moveTradingDay" @chart-loaded="captureChart" @state-loaded="captureState" @view-applied="captureAppliedState" /><CandidatePanel :key="document.mode + document.day" :cards="document.report.cards" :day="document.day" :frozen="document.mode === 'snapshot'" :snapshot-charts="document.charts || {}" :initial-filters="filters" :state-view="activeStateView" @chart-loaded="captureChart" @detail-loaded="captureDetail" @filters-change="filters = $event" /></div>
+      <div id="review-panel" role="tabpanel" v-show="activeTab === 'review'"><QualitySummary :quality="document.report.quality" :gate="document.report.gate" /><MarketTimeline :markets="document.report.markets" /><ContinuousPanel :key="document.mode + document.day" :day="document.day" :cards="document.report.cards" :frozen="document.mode === 'snapshot'" :previous-day="previousDay" :next-day="nextDay" :snapshot-views="document.stateViews || {}" :snapshot-window="document.stateWindow" :snapshot-charts="document.charts || {}" :initial-ui="continuousUI" @navigate-day="moveTradingDay" @chart-loaded="captureChart" @state-loaded="captureState" @view-applied="captureAppliedState" @ui-change="captureContinuousUI" /><CandidatePanel :key="document.mode + document.day" :cards="document.report.cards" :day="document.day" :frozen="document.mode === 'snapshot'" :snapshot-charts="document.charts || {}" :initial-filters="filters" :state-view="activeStateView" @chart-loaded="captureChart" @detail-loaded="captureDetail" @filters-change="filters = $event" /></div>
       <div id="patterns-panel" role="tabpanel" v-show="activeTab === 'patterns'"><PatternPanel :key="document.mode + document.day" :day="document.day" :frozen="document.mode === 'snapshot'" :snapshot-patterns="document.patterns || null" :snapshot-charts="document.charts || {}" :initial-ui="document.patternUI || {}" :levels="stateLevels" :state-window="stateWindow" @chart-loaded="captureChart" @pattern-loaded="capturePattern" @detail-loaded="capturePatternDetail" @ui-change="capturePatternUI" /></div>
       <div id="validation-panel" role="tabpanel" v-show="activeTab === 'validation'"><ValidationPanel :key="document.mode + document.day" :day="document.day" :cards="document.report.cards" :frozen="document.mode === 'snapshot'" :saved="document.validation || null" :saved-details="document.validationDetails || {}" @loaded="captureValidation" @detail-loaded="captureValidationDetail" /></div>
       <section class="panel migration-note"><h2>研究边界</h2><p>日级报告、连续观察、单股深查、22 类形态及事件后续收益均为研究证据。收盘后可识别事件的后续收盘收益，不等于可成交收益；盘口队列重建、参数外推及交易授权仍未实现。</p></section>

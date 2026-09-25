@@ -11,25 +11,26 @@ const props = defineProps({
   snapshotWindow: { type: Number, default: null },
   snapshotCharts: { type: Object, default: () => ({}) },
   previousDay: { type: String, default: null }, nextDay: { type: String, default: null },
+  initialUi: { type: Object, default: () => ({}) },
 })
-const emit = defineEmits(['chart-loaded', 'state-loaded', 'view-applied', 'navigate-day'])
+const emit = defineEmits(['chart-loaded', 'state-loaded', 'view-applied', 'navigate-day', 'ui-change'])
 const windowDays = ref(props.snapshotWindow || 3)
 const document = ref(props.frozen ? props.snapshotViews[String(windowDays.value)] || null : null)
 const status = ref(props.frozen ? document.value ? '只读：展示保存时的连续状态' : '此快照未保存所选窗口的连续状态' : '选择交易日窗口后计算；不自动扫描原始 Level-2')
 const pending = ref(false)
-const query = ref('')
-const change = ref('all')
-const continuity = ref('all')
-const coverage = ref('all')
-const sort = ref('code')
-const sortDirection = ref('asc')
+const query = ref(props.initialUi.search || '')
+const change = ref(props.initialUi.change || 'all')
+const continuity = ref(props.initialUi.continuity || 'all')
+const coverage = ref(props.initialUi.coverage || 'all')
+const sort = ref(props.initialUi.sort || 'code')
+const sortDirection = ref(props.initialUi.direction || 'asc')
 const defaultAdvanced = () => ({ preset: 'all', price: 'all', amountMin: '', amountMax: '',
   levelSign: 'all', weightedSign: 'all', turn: 'all', volume: 'all',
   levelMin: '', levelMax: '', deltaMin: '', deltaMax: '', weightedMin: '', weightedMax: '',
   priceMin: '', priceMax: '', buyDays: '', sellDays: '', improveTimes: '', worsenTimes: '' })
-const advancedRaw = ref(defaultAdvanced())
+const advancedRaw = ref({ ...defaultAdvanced(), ...(props.initialUi.advanced || {}) })
 const advanced = computed(() => parseAdvancedFilters(advancedRaw.value))
-const page = ref(1)
+const page = ref(props.initialUi.page || 1)
 let sequence = 0
 let timer = null
 const view = computed(() => document.value?.view || document.value)
@@ -41,6 +42,11 @@ const filtered = computed(() => advanced.value.error ? [] : filterContinuousStoc
 const shown = computed(() => filtered.value.slice((page.value - 1) * 20, page.value * 20))
 const pages = computed(() => Math.max(1, Math.ceil(filtered.value.length / 20)))
 watch([query, change, continuity, coverage, sort, sortDirection, advancedRaw], () => { page.value = 1 }, { deep: true })
+watch([query, change, continuity, coverage, sort, sortDirection, advancedRaw, page], () => {
+  emit('ui-change', { search: query.value, change: change.value, continuity: continuity.value,
+    coverage: coverage.value, sort: sort.value, direction: sortDirection.value,
+    advanced: { ...advancedRaw.value }, page: page.value })
+}, { deep: true })
 watch(pages, count => { if (page.value > count) page.value = count })
 watch(view, current => {
   if (!current?.applicable) {

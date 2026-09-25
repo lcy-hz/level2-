@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
-from level2_workspace import Workspace, BASE, digest, report_sources_match
+from level2_workspace import Workspace, BASE, digest, report_sources_match, validate_continuous_ui
 
 
 class WorkspaceTests(unittest.TestCase):
@@ -58,7 +58,10 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_snapshot_is_frozen(self):
         receipt=self.w.record_chart({'day':'20260907','code':'000001.SZ','source':str(self.base),'labels':[],'bars':[[1,2,3]]},'day')
-        result=self.w.save({'day':'20260907','data':copy.deepcopy(self.data),'filters':{'search':'000001'},'charts':{'day/000001.SZ':receipt}})
+        continuous_ui={'search':'平安','change':'improve','continuity':'known','coverage':'full',
+                       'sort':'delta','direction':'desc','advanced':{'preset':'relief','amountMin':'2'},'page':2}
+        result=self.w.save({'day':'20260907','data':copy.deepcopy(self.data),'filters':{'search':'000001'},
+                            'continuousUI':continuous_ui,'charts':{'day/000001.SZ':receipt}})
         saved=self.w.snapshot_path(result['id'])
         before=(saved/'bundle.json').read_bytes()
         self.report.write_text('changed live report')
@@ -69,6 +72,19 @@ class WorkspaceTests(unittest.TestCase):
         frozen=self.w.snapshot_document(result['id'])
         self.assertEqual(frozen['charts']['day/000001.SZ']['bars'],[[1,2,3]])
         self.assertEqual(frozen['charts'].get('minute/000001.SZ'),None)
+        self.assertEqual(frozen['continuousUI'],continuous_ui)
+
+    def test_continuous_controls_reject_invalid_ranges_and_unknown_fields(self):
+        self.assertEqual(validate_continuous_ui({}),{})
+        for ui in ({'advanced':{'amountMin':'2','amountMax':'1'}},
+                   {'advanced':{'buyDays':'0'}},
+                   {'advanced':{'levelMin':'Infinity'}},
+                   {'advanced':{'unknown':'x'}},
+                   {'sort':'not-a-sort'},
+                   {'sort':[]},
+                   {'page':0}):
+            with self.subTest(ui=ui),self.assertRaises(ValueError):
+                validate_continuous_ui(ui)
 
     def test_snapshot_preserves_record_order_instead_of_resorting_legacy_evidence(self):
         second={'code':'000002.SZ','close':8}
@@ -216,5 +232,6 @@ class WorkspaceTests(unittest.TestCase):
         result=self.w.snapshot_document(identifier)
         self.assertEqual(result['report'],self.data)
         self.assertEqual(result['integrity']['report'],'verified-against-frozen-html')
+        self.assertEqual(result['continuousUI'],{})
 
 if __name__=='__main__':unittest.main()

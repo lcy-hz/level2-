@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 import hashlib
 import json
+import math
 import re
 import subprocess
 import sys
@@ -28,6 +29,48 @@ def fingerprint(path):
 
 def digest(value):
     return hashlib.sha256(encoded(value).encode()).hexdigest()
+
+
+def validate_continuous_ui(value):
+    """Freeze presentation controls, never accept them as computed market evidence."""
+    if not isinstance(value,dict) or len(encoded(value))>5000:raise ValueError('连续筛选参数无效')
+    choices={
+        'change':{'all','improve','worsen','flat','unknown'},
+        'continuity':{'all','known','unknown'},
+        'coverage':{'all','full','partial','unknown'},
+        'sort':{'code','level','delta','weighted','slope','streak','improve','amount','amountRelative','sizePeer','liquidityPeer','price','drawdown','relative'},
+        'direction':{'asc','desc'},
+    }
+    if set(value)-{'search','change','continuity','coverage','sort','direction','advanced','page'}:
+        raise ValueError('连续筛选参数无效')
+    if 'search' in value and (not isinstance(value['search'],str) or len(value['search'])>200):raise ValueError('连续搜索无效')
+    if any(key in value and (not isinstance(value[key],str) or value[key] not in allowed) for key,allowed in choices.items()):
+        raise ValueError('连续筛选选项无效')
+    if 'page' in value and (type(value['page']) is not int or not 1<=value['page']<=10000):raise ValueError('连续分页无效')
+    advanced=value.get('advanced',{})
+    if not isinstance(advanced,dict):raise ValueError('连续高级筛选无效')
+    selects={'preset':{'all','relief','buyStrong','buyWeak','sellStrong','upSell','downBuy'},
+             'price':{'all','positive','negative','zero'},
+             'levelSign':{'all','positive','negative','zero'},'weightedSign':{'all','positive','negative','zero'},
+             'turn':{'all','toBuy','toSell','buy','sell'},'volume':{'all','positive','negative','zero'}}
+    ranges={key+edge for key in ('amount','level','delta','weighted','price') for edge in ('Min','Max')}
+    durations={'buyDays','sellDays','improveTimes','worsenTimes'}
+    if set(advanced)-set(selects)-ranges-durations:raise ValueError('连续高级筛选字段无效')
+    parsed={}
+    for key,item in advanced.items():
+        if not isinstance(item,str) or len(item)>40:raise ValueError('连续高级筛选值无效')
+        if key in selects:
+            if item not in selects[key]:raise ValueError('连续高级筛选选项无效')
+        elif item:
+            try:number=float(item)
+            except ValueError:raise ValueError('连续数值筛选无效') from None
+            if not math.isfinite(number) or (key.startswith('amount') and number<0) or (key in durations and (not number.is_integer() or number<1)):
+                raise ValueError('连续数值筛选无效')
+            parsed[key]=number
+    for key in ('amount','level','delta','weighted','price'):
+        if key+'Min' in parsed and key+'Max' in parsed and parsed[key+'Min']>parsed[key+'Max']:
+            raise ValueError('连续筛选上下限无效')
+    return value
 
 
 def report_sources_match(recorded, current):
@@ -250,6 +293,7 @@ class Workspace:
                 raise ValueError('未标记深查完成却附带深查证据')
         # Freeze the actual viewed report, including loaded detail tables. No background completion.
         if not isinstance(filters,dict) or any(not isinstance(v,str) or len(v)>200 for v in filters.values()):raise ValueError('筛选条件无效')
+        continuous_ui=validate_continuous_ui(request.get('continuousUI',{}))
         charts={};receipts={}
         requested=request.get('charts',{})
         if not isinstance(requested,dict) or len(requested)>10418:raise ValueError('图表范围无效')
@@ -267,7 +311,7 @@ class Workspace:
         if states:
             process=subprocess.run(['node','-e',"const m=require(process.argv[1]);let s='';process.stdin.on('data',x=>s+=x);process.stdin.on('end',()=>process.stdout.write(JSON.stringify(Object.fromEntries(Object.entries(JSON.parse(s)).map(([k,v])=>[k,m.derive(v)])))));",str(self.base/'level2_state_view.js')],input=encoded(states),text=True,capture_output=True,timeout=30,check=True)
             views=json.loads(process.stdout)
-        context={'mode':'snapshot','day':day,'id':identifier,'savedAt':saved,'charts':charts,'filters':filters,'states':states,'stateWindow':state_window}
+        context={'mode':'snapshot','day':day,'id':identifier,'savedAt':saved,'charts':charts,'filters':filters,'continuousUI':continuous_ui,'states':states,'stateWindow':state_window}
         context['stateViews']=views
         pattern_result=None
         if request.get('patternReceipt'):
@@ -293,7 +337,7 @@ class Workspace:
         if not isinstance(ui,dict) or len(encoded(ui))>10000:raise ValueError('形态视图参数无效')
         context['patternUI']=ui
         provenance=self.report_path(day).with_suffix('.provenance.json')
-        bundle={'format':'vue-json','id':identifier,'day':day,'savedAt':saved,'chartCount':len(charts),'report':data,'filters':filters,
+        bundle={'format':'vue-json','id':identifier,'day':day,'savedAt':saved,'chartCount':len(charts),'report':data,'filters':filters,'continuousUI':continuous_ui,
                 'stateViews':views,
                 'patterns':pattern_result,'patternUI':ui,'validation':validation_result,
                 'validationDetails':validation_details,
@@ -348,4 +392,4 @@ class Workspace:
                 'validation':frozen_context.get('validation'),
                 'validationDetails':frozen_context.get('validationDetails',{}),
                 'patternUI':frozen_context.get('patternUI',{}),
-                'filters':frozen_context.get('filters',{}),'scope':bundle['scope']}
+                'filters':frozen_context.get('filters',{}),'continuousUI':frozen_context.get('continuousUI',{}),'scope':bundle['scope']}
