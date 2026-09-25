@@ -8,6 +8,7 @@ const sortable = {
   streak: stock => stock.streak,
   improve: stock => stock.expected > 1 ? stock.improve : null,
   amount: stock => stock.amount,
+  amountRelative: stock => stock.amountRelativePct,
   price: stock => stock.priceReturn,
   drawdown: stock => stock.maxCloseDrawdown,
   relative: stock => stock.relativeReturn,

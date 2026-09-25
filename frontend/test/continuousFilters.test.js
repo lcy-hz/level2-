@@ -53,3 +53,10 @@ test('relative benchmark sort retains legitimate zero and unknown last', () => {
   assert.deepEqual(codes(filterContinuousStocks(rows, {}, { sort: 'relative', direction: 'asc' })), ['B', 'A', 'D', 'C'])
   assert.deepEqual(codes(filterContinuousStocks(rows, {}, { sort: 'relative', direction: 'desc' })), ['D', 'A', 'B', 'C'])
 })
+
+test('relative turnover sorts observed zero while missing stays last', () => {
+  const rows = [{ code: 'A', amountRelativePct: 0 }, { code: 'B', amountRelativePct: -25 },
+    { code: 'C', amountRelativePct: null }, { code: 'D', amountRelativePct: 50 }]
+  assert.deepEqual(codes(filterContinuousStocks(rows, {}, { sort: 'amountRelative', direction: 'asc' })), ['B', 'A', 'D', 'C'])
+  assert.deepEqual(codes(filterContinuousStocks(rows, {}, { sort: 'amountRelative', direction: 'desc' })), ['D', 'A', 'B', 'C'])
+})

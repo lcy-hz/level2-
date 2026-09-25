@@ -15,6 +15,17 @@ class StateTests(unittest.TestCase):
         self.assertAlmostEqual(s['weighted'],-8)
         self.assertEqual(s['delta'],-20)
 
+    def test_relative_turnover_uses_only_complete_prior_window(self):
+        observations={DAYS[-3]:row(1,100),DAYS[-2]:row(1,300),DAYS[-1]:row(1,300)}
+        measured=compute(observations,DAYS,DAYS[-1],3)
+        self.assertEqual(measured['amountPriorMean'],200)
+        self.assertAlmostEqual(measured['amountRelativePct'],50)
+        self.assertIsNone(compute(observations,DAYS,DAYS[-1],1)['amountRelativePct'])
+        self.assertIsNone(compute({DAYS[-3]:row(1,100),DAYS[-1]:row(1,300)},DAYS,DAYS[-1],3)['amountRelativePct'])
+        self.assertIsNone(compute({DAYS[-3]:row(1,100),DAYS[-2]:row(1,300)},DAYS,DAYS[-1],3)['amountRelativePct'])
+        observations['20260923']=row(1,100000)
+        self.assertEqual(measured,compute(observations,DAYS+['20260923'],DAYS[-1],3))
+
     def test_negative_improving(self):
         rows=dict(zip(DAYS[-3:],[row(-8),row(-6),row(-2)]))
         s=compute(rows,DAYS,DAYS[-1],3)

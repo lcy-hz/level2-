@@ -110,6 +110,13 @@ def compute(rows, days, day, window, benchmark_return=None):
             if not usable(a) or not usable(b) or b['ratio']>=a['ratio']:break
             worsen+=1
     change_amount=(latest['amount']/previous['amount']-1)*100 if latest and latest.get('amount',0)>0 and previous and previous.get('amount',0)>0 else None
+    # Compare the latest session only with earlier sessions inside the applied window.
+    # A one-day or incomplete window cannot supply a valid historical denominator.
+    prior_amounts=[r['amount'] for r in series[:-1] if r and r.get('amount',0)>0]
+    prior_amount_mean=(sum(prior_amounts)/(window-1)
+                       if window>1 and len(dates)==window and len(prior_amounts)==window-1 else None)
+    amount_relative=(100*(latest['amount']/prior_amount_mean-1)
+                     if prior_amount_mean is not None and latest and latest.get('amount',0)>0 else None)
     baseidx=days.index(dates[0])-1 if dates else -1
     baseline=rows.get(days[baseidx]) if baseidx>=0 else None
     prices=[baseline,*series]
@@ -141,6 +148,7 @@ def compute(rows, days, day, window, benchmark_return=None):
             'amountValid':len(amounts),'missing':[d for d,r in zip(dates,series) if not usable(r)],
             'status':'AVAILABLE' if full else 'INCOMPLETE','amount':latest.get('amount') if latest else None,
             'amountChange':change_amount,'meanAmount':sum(r['amount'] for r in amounts)/window if complete_amount else None,
+            'amountPriorMean':prior_amount_mean,'amountRelativePct':amount_relative,
             'priceReturn':price_return,
             'relativeReturn':price_return-benchmark_return if price_return is not None and benchmark_return is not None else None,
             'maxCloseDrawdown':drawdown,'drawdownPeakDay':drawdown_peak,'drawdownTroughDay':drawdown_trough,
