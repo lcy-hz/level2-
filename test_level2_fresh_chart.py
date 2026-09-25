@@ -7,7 +7,8 @@ from urllib.request import urlopen
 from unittest.mock import patch
 import unittest
 from level2_kline import build_bundle
-from level2_detail_server import Service,make_handler
+from level2_detail_service import Service
+from level2_detail_server import make_handler
 
 
 class FreshChartTests(unittest.TestCase):

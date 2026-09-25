@@ -10,7 +10,8 @@ from types import SimpleNamespace
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from level2_detail_server import make_handler, read_report
+from level2_detail_server import make_handler
+from level2_detail_service import read_report
 
 
 class ReportApiTests(unittest.TestCase):

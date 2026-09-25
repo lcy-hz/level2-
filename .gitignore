@@ -8,6 +8,7 @@
 !/validate_level2_report.py
 !/level2_detail_server.py
 !/level2_detail_research.py
+!/level2_detail_service.py
 !/level2_intraday.py
 !/level2_minute_state.py
 !/level2_quote_path.py

@@ -190,7 +190,7 @@ class Workspace:
         return {'status':'missing','message':'报告待计算'}
 
     def get_service(self,day):
-        from level2_detail_server import Service,read_report
+        from level2_detail_service import Service,read_report
         if self.status(day)['status']!='ready':raise ValueError('所选日期报告未就绪，请先计算')
         with self.lock:
             if day not in self.services:
@@ -229,7 +229,7 @@ class Workspace:
                 if line.startswith('aggregate'):
                     with self.lock:self.jobs[day]={'status':'running','message':'正在汇总 '+line.strip().split()[-1]+'；随后计算候选详情'}
             if process.wait()!=0:raise ValueError('\n'.join(tail)[-1800:])
-            from level2_detail_server import read_report
+            from level2_detail_service import read_report
             data=read_report(tmp)
             if data['markets'][-1]['day']!=day or not data['cards']:raise ValueError('生成结果日期或覆盖无效')
             if digest(initial)!=digest(self.sources(day)):raise ValueError('计算期间源数据变化，未发布结果')

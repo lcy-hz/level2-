@@ -11,7 +11,10 @@ import duckdb
 import pandas as pd
 import level2_detail_research as detail_research
 import level2_detail_server as detail_http
-from level2_detail_server import Service, calculate, source_identity, make_handler
+import level2_detail_service as detail_service
+from level2_detail_research import calculate, source_identity
+from level2_detail_service import Service
+from level2_detail_server import make_handler
 from level2_trade_path import observe_prints
 
 
@@ -174,8 +177,8 @@ class DetailTests(unittest.TestCase):
         self.assertNotEqual(before,source_identity(self.day,self.root))
 
     def test_calculation_identity_is_owned_by_research_not_http(self):
-        self.assertIs(detail_http.calculate, detail_research.calculate)
-        self.assertIs(detail_http.source_identity, detail_research.source_identity)
+        self.assertIs(detail_service.Service, Service)
+        self.assertIs(detail_service.calculate, detail_research.calculate)
         before = source_identity(self.day, self.root)
         with patch.object(detail_http, '__file__', str(self.root / 'http.py')):
             self.assertEqual(before, source_identity(self.day, self.root))
