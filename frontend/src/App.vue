@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { dates, report, reportStatus, saveSnapshot, snapshot, snapshots, startReportBuild, stateMeta } from './api.js'
-import { adjacentTradingDay, initialReportDay } from './tradingDays.js'
+import { adjacentTradingDay, describeDateStatus, initialReportDay } from './tradingDays.js'
 import { normalizeCandidateFilters } from './candidateFilters.js'
 import MarketTimeline from './components/MarketTimeline.vue'
 import QualitySummary from './components/QualitySummary.vue'
@@ -239,7 +239,7 @@ onBeforeUnmount(() => { buildRequest++; clearTimeout(buildTimer) })
       <button v-if="snapshotId" class="save-button secondary" :disabled="busy" @click="returnLive">返回最新数据</button>
       <button v-if="document?.mode === 'live'" class="save-button" :disabled="saving" @click="save">{{ saving ? '保存中…' : '保存当前证据快照' }}</button>
     </nav>
-    <p v-if="sourceStatus && !snapshotId" class="scope">所选 {{ targetDay }}：{{ sourceStatus.message }}{{ !sourceStatus.canBuild ? '；最近 7 交易日的正式文件或日历不足，暂不可计算' : '' }}{{ !sourceStatus.minute ? '；当日分钟文件缺失' : '' }}</p>
+    <p v-if="sourceStatus && !snapshotId" class="scope">所选 {{ targetDay }}：{{ describeDateStatus(sourceStatus) }}</p>
     <p v-if="buildMessage" class="snapshot-message" role="status">{{ buildMessage }}</p>
     <p v-if="saveMessage" class="snapshot-message" role="status">{{ saveMessage }} <button v-if="savedId" @click="openSaved">查看快照</button></p>
 
