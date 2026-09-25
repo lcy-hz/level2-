@@ -1,7 +1,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, ref, useId } from 'vue'
 import { chart } from '../api.js'
-import { buildChartModel } from '../chartModel.js'
+import { buildChartModel, minuteDrawdownText } from '../chartModel.js'
 
 const props = defineProps({
   code: { type: String, required: true }, name: { type: String, default: '' }, day: { type: String, required: true },
@@ -27,6 +27,7 @@ const selectedDate = computed(() => selectedBar.value ? result.value.labels[sele
 const money = value => Number.isFinite(value) ? `${(value / 1e8).toFixed(2)} 亿` : '未知'
 const dayLabel = value => /^\d{8}$/.test(value || '') ? `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}` : value || '未知'
 const fmt = value => Number.isFinite(value) ? value.toFixed(2) : '未知'
+const minuteDrawdown = computed(() => minuteDrawdownText(result.value))
 
 async function place(element) {
   await nextTick()
@@ -131,6 +132,7 @@ onBeforeUnmount(close)
             <text x="52" y="285" fill="#a9bfd0" font-size="11">{{ kind === 'minute' ? '09:31' : dayLabel(model.labels[0]) }}</text><text x="480" y="285" text-anchor="end" fill="#a9bfd0" font-size="11">{{ kind === 'minute' ? '15:00' : dayLabel(model.labels.at(-1)) }}</text>
           </svg>
           <p class="chart-note">红色空心＝收≥开，绿色实心＝收&lt;开；下方为成交量。{{ kind === 'minute' ? model.zero == null ? '昨收缺失，0 轴未知。' : `0 轴为昨收 ${fmt(result.preClose)}，垂直居中。` : '前复权价格与原始成交量分别展示。' }}缺失 {{ model.gaps.length }} {{ kind === 'minute' ? '分钟' : '交易日' }}，不插值。</p>
+          <p v-if="kind === 'minute'" class="chart-note">{{ minuteDrawdown }}。仅比较有成交分钟的收盘价与此前峰值（含昨收），不包含分钟内高低点；缺档可能低估实际盘中回撤。</p>
         </template>
         <details v-if="result" class="chart-note"><summary>来源与质量口径</summary><p>{{ result.source }} · {{ result.method }}</p><p v-if="result.quality">{{ result.quality }}</p><p v-if="result.rejected">排除 {{ result.rejected }} 条异常 OHLC。</p><p>读取时间：{{ result.readAt || '快照未记录' }}。本地最新不等于交易所实时行情。</p></details>
       </section>

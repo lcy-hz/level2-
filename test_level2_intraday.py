@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import duckdb
-from level2_intraday import calculate_intraday, minute_identity, minute_slots, previous_close
+from level2_intraday import calculate_intraday, minute_close_drawdown, minute_identity, minute_slots, previous_close
 
 
 class MinuteTests(unittest.TestCase):
@@ -36,11 +36,14 @@ class MinuteTests(unittest.TestCase):
         self.temp.cleanup()
 
     def test_direct_minute_source_units_and_no_gap_fill(self):
-        r = calculate_intraday('000977.SZ',self.day,{},lambda _:None,self.root)
+        with patch('level2_intraday.DAILY', Path(self.temp.name) / 'missing_daily'):
+            r = calculate_intraday('000977.SZ',self.day,{},lambda _:None,self.root)
         self.assertEqual(len(r['bars']),2)
         self.assertEqual(r['bars'][0],[0,10.,11.,9.,10.5,12.5,13125.])
         self.assertEqual(r['bars'][-1][0],239)
         self.assertEqual(r['zeroVolumeMinutes'],1)
+        self.assertEqual(r['minuteCloseDrawdown']['status'],'MISSING_PRE_CLOSE')
+        self.assertIsNone(r['minuteCloseDrawdown']['valuePct'])
         self.assertIn('单位手',r['method'])
         self.assertEqual(r['source'],str(self.source))
 
@@ -71,6 +74,20 @@ class MinuteTests(unittest.TestCase):
             self.assertEqual(previous_close('000977.SZ',self.day)[0],71.85)
             p.write_text('ts_code,trade_date,pre_close\n000977.SZ,20260921,71.85\n')
             self.assertIsNone(previous_close('000977.SZ',self.day)[0])
+
+    def test_observed_drawdown_uses_only_traded_minute_closes(self):
+        labels=minute_slots()
+        bars=[[0,10,11,8,10,2,2000], [1,10,13,9,12,3,3600],
+              [2,12,12,7,7,0,0], [3,12,12,8,9,4,3600]]
+        result=minute_close_drawdown(bars,labels,10)
+        self.assertEqual(result['status'],'OBSERVED')
+        self.assertAlmostEqual(result['valuePct'],-25)
+        self.assertEqual((result['peakTime'],result['troughTime']),('09:32','09:34'))
+        self.assertEqual((result['tradedMinutes'],result['presentMinutes'],result['expectedMinutes']),(3,4,240))
+        self.assertIsNone(minute_close_drawdown(bars,labels,None)['valuePct'])
+        self.assertEqual(minute_close_drawdown([bars[2]],labels,10)['status'],'NO_TRADED_MINUTES')
+        self.assertEqual(minute_close_drawdown([bars[2]],labels,10)['valuePct'],None)
+        self.assertEqual(minute_close_drawdown([[0,10,11,8,10.5,2,2100]],labels,10)['valuePct'],0)
 
 
 if __name__ == '__main__':

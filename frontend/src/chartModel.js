@@ -40,3 +40,13 @@ export function buildChartModel(data, kind) {
     }),
   }
 }
+
+export function minuteDrawdownText(data) {
+  const item = data?.minuteCloseDrawdown
+  if (!item) return '此图表未保存分钟收盘回撤'
+  if (item.status === 'MISSING_PRE_CLOSE') return '昨收缺失，分钟收盘回撤未知'
+  if (item.status === 'NO_TRADED_MINUTES') return '无可用成交分钟，分钟收盘回撤未知'
+  if (item.status !== 'OBSERVED' || !Number.isFinite(item.valuePct)) return '分钟收盘回撤未知'
+  const times = item.peakTime && item.troughTime ? `（${item.peakTime} → ${item.troughTime}）` : ''
+  return `已观测分钟收盘最大回撤 ${item.valuePct.toFixed(2)}%${times}；成交分钟 ${item.tradedMinutes}/${item.expectedMinutes}`
+}

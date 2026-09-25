@@ -35,6 +35,33 @@ def minute_slots():
     return [f'{m//60:02d}:{m%60:02d}' for m in [*range(571, 691), *range(781, 901)]]
 
 
+def minute_close_drawdown(bars, labels, pre_close):
+    """Observed traded-minute closes from the prior close, not intrabar extrema."""
+    traded = [bar for bar in bars if bar[5] > 0]
+    result = {'valuePct': None, 'peakTime': None, 'troughTime': None,
+              'tradedMinutes': len(traded), 'presentMinutes': len(bars),
+              'expectedMinutes': len(labels)}
+    if pre_close is None or not math.isfinite(pre_close) or pre_close <= 0:
+        result['status'] = 'MISSING_PRE_CLOSE'
+        return result
+    if not traded:
+        result['status'] = 'NO_TRADED_MINUTES'
+        return result
+    peak, peak_time = pre_close, '昨收'
+    result['status'] = 'OBSERVED'
+    result['valuePct'] = 0.0
+    for bar in traded:
+        close = float(bar[4])
+        if close > peak:
+            peak, peak_time = close, labels[bar[0]]
+        drawdown = 100 * (close / peak - 1)
+        if drawdown < result['valuePct']:
+            result['valuePct'] = drawdown
+            result['peakTime'] = peak_time
+            result['troughTime'] = labels[bar[0]]
+    return result
+
+
 def minute_identity(day, root):
     source = minute_directory(root) / f'{day}.parquet'
     audit = root / '_conversion_audit' / day
@@ -73,11 +100,13 @@ def calculate_intraday(code, day, expected, progress, root):
         seen.add(t)
         bars.append([slots[t],o,h,l,c,v,a])
     pre_close, pre_close_source = previous_close(code, day)
+    observed_drawdown = minute_close_drawdown(bars, labels, pre_close)
     if minute_identity(day, root) != identity:
         raise ValueError('读取期间分钟文件发生变化，请重试')
     policy = json.loads((root / '_conversion_audit' / day / 'manifest.json').read_text()).get('minute_policy','分钟生成口径未提供')
     return {'code':code,'day':day,'sourceIdentity':identity,'bars':bars,'labels':labels,
             'preClose':pre_close,'preCloseSource':pre_close_source,
+            'minuteCloseDrawdown':observed_drawdown,
             'zeroVolumeMinutes':sum(b[5]==0 for b in bars),'source':str(source),
             'method':f'直接读取本地 stock_minute；价格元/股，不复权；Volume 单位手（100股），Turnover 单位元。源文件生成口径：{policy}。横轴为分钟结束时刻；缺失行留空，不额外插值。',
             'quality':'源文件由行情快照生成，OHLC 可能与逐笔汇总不同；无成交分钟可能沿用前收或上一收盘。'}
