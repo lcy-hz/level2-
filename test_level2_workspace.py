@@ -103,6 +103,7 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(frozen['stateViews'],{})
         self.assertEqual(frozen['charts'],{})
         self.assertIsNone(frozen['patterns'])
+        self.assertIsNone(frozen['validation'])
         self.assertEqual(frozen['patternUI'],{})
         bundle=self.w.snapshot_path(saved['id'])/'bundle.json'
         content=json.loads(bundle.read_text());content['report']['cards'][0]['close']=99
@@ -133,6 +134,22 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(frozen['patterns']['result'],pattern)
         self.assertEqual(frozen['patterns']['details']['000001.SZ'],detail)
         self.assertEqual(frozen['patternUI']['tab'],'patterns')
+
+    def test_snapshot_freezes_verified_validation_without_live_backfill(self):
+        study={'start':'20260901','end':'20260907','asof':'20260907','split':'20260905',
+               'summary':[{'rule':'SELL_EASING','observed':12}], 'sourceIdentity':'fixture'}
+        self.w._validation=SimpleNamespace(frozen=lambda token: study if token=='a'*32 else self._invalid_validation())
+        saved=self.w.save({'day':'20260907','data':self.data,'validationReceipt':'a'*32,
+                           'patternUI':{'tab':'validation'}})
+        frozen=self.w.snapshot_document(saved['id'])
+        self.assertEqual(frozen['validation'],study)
+        self.assertEqual(frozen['patternUI']['tab'],'validation')
+        with self.assertRaises(ValueError):
+            self.w.save({'day':'20260907','data':self.data,'validationReceipt':'b'*32})
+
+    @staticmethod
+    def _invalid_validation():
+        raise ValueError('后续收益凭据无效')
 
     def test_invalid_data_and_identifiers(self):
         bad=copy.deepcopy(self.data);bad['cards'][0]['close']=99

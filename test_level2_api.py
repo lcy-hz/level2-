@@ -5,7 +5,7 @@ from http.server import ThreadingHTTPServer
 from threading import Thread
 from types import SimpleNamespace
 from urllib.error import HTTPError
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 from level2_detail_server import make_handler
 
@@ -22,6 +22,9 @@ class ReportApiTests(unittest.TestCase):
                                                 'researchOnly':True,'report':report}
                 if ident=='a'*32 else self._invalid(),
             get_service=lambda day: self.service if day=='20260922' else self._invalid(),
+            validation=SimpleNamespace(start=lambda request: {'id':'a'*32,'status':'queued'},
+                status=lambda job: {'status':'done','receipt':'b'*32,'result':{'start':'20260901','summary':[]}}
+                if job=='a'*32 else self._invalid()),
             state=SimpleNamespace(status=lambda day,window: {'status':'done','receipt':'proof',
                 'result':{'day':day,'window':window,'states':{'000001.SZ':{'history':[
                     {'day':'20260922','amount':100,'net':10,'ratio':10,'unknown':0}]}},
@@ -68,6 +71,18 @@ class ReportApiTests(unittest.TestCase):
         self.assertEqual(result['view']['common'],1)
         self.assertEqual(result['view']['trajectory'][0]['ratio'],10)
         self.assertFalse(result['view']['applicable'])
+
+    def test_validation_job_api_and_origin_gate(self):
+        url=f'http://127.0.0.1:{self.port}/api/validation'
+        body=json.dumps({'start':'20260901'}).encode()
+        request=Request(url,data=body,headers={'Content-Type':'application/json',
+            'Origin':f'http://127.0.0.1:{self.port}'},method='POST')
+        with urlopen(request) as response:
+            self.assertEqual(json.load(response)['id'],'a'*32)
+        self.assertEqual(self.fetch('/api/validation/status?id='+'a'*32)['result']['summary'],[])
+        bad=Request(url,data=body,headers={'Content-Type':'application/json','Origin':'https://other.invalid'},method='POST')
+        with self.assertRaises(HTTPError) as context:urlopen(bad)
+        self.assertEqual(context.exception.code,403)
 
 
 if __name__=='__main__':

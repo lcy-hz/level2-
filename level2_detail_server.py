@@ -192,6 +192,10 @@ def make_handler(service, port, minute_service=None, workspace=None):
             path = urlsplit(self.path).path
             query=parse_qs(urlsplit(self.path).query)
             day=query.get('date',[service.day])[0]
+            if workspace and path=='/api/validation/status':
+                try:self.respond(workspace.validation.status(query.get('id',[''])[0]))
+                except (ValueError, OSError, KeyError) as exc:self.respond({'status':'error','message':str(exc)},400)
+                return
             if workspace and path in ('/api/patterns/meta','/api/patterns/status','/api/patterns/detail'):
                 try:
                     p=workspace.patterns
@@ -295,13 +299,13 @@ def make_handler(service, port, minute_service=None, workspace=None):
                 return
             path=urlsplit(self.path).path
             query=parse_qs(urlsplit(self.path).query)
-            if workspace and path in ('/api/report/build','/api/snapshots','/api/state','/api/patterns'):
+            if workspace and path in ('/api/report/build','/api/snapshots','/api/state','/api/patterns','/api/validation'):
                 try:
                     size=int(self.headers.get('Content-Length','0'))
                     if not 0<size<=32*1024*1024 or self.headers.get('Content-Type','').split(';')[0]!='application/json':raise ValueError('请求格式或长度无效')
                     data=json.loads(self.rfile.read(size))
                     if not isinstance(data,dict):raise ValueError('请求格式无效')
-                    self.respond(workspace.build(data.get('day')) if path=='/api/report/build' else workspace.state.start(data.get('day'),data.get('window')) if path=='/api/state' else workspace.patterns.start(data.get('day')) if path=='/api/patterns' else workspace.save(data),201)
+                    self.respond(workspace.build(data.get('day')) if path=='/api/report/build' else workspace.state.start(data.get('day'),data.get('window')) if path=='/api/state' else workspace.patterns.start(data.get('day')) if path=='/api/patterns' else workspace.validation.start(data) if path=='/api/validation' else workspace.save(data),201)
                 except Exception as exc:self.respond({'status':'error','message':str(exc)},400)
                 return
             try:
@@ -350,3 +354,4 @@ if __name__ == '__main__':
             workspace.pool.shutdown(wait=False, cancel_futures=True)
             workspace.state.pool.shutdown(wait=False, cancel_futures=True)
             if workspace._patterns:workspace._patterns.pool.shutdown(wait=False,cancel_futures=True)
+            if workspace._validation:workspace._validation.pool.shutdown(wait=False,cancel_futures=True)

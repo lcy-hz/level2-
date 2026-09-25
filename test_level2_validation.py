@@ -1,6 +1,10 @@
 import unittest
+import tempfile
+import json
+from pathlib import Path
+from unittest.mock import patch
 
-from level2_validation import study
+from level2_validation import study, ValidationService
 
 
 DAYS = ['20260914', '20260915', '20260916', '20260917', '20260918',
@@ -76,6 +80,34 @@ class ValidationTests(unittest.TestCase):
             study({}, {}, DAYS, '20260915', '20260916', '20260918', '20260915', (0,))
         with self.assertRaises(ValueError):
             study({}, {}, DAYS, '20260915', '20260916', '20260915', '20260915')
+
+    def test_background_receipt_freezes_summary_and_rejects_changed_source(self):
+        identity = ['source-a']
+        def calculate(start, end, asof, split, horizons):
+            return {'start': start, 'end': end, 'asof': asof, 'split': split,
+                    'horizons': list(horizons), 'sourceIdentity': identity[0],
+                    'summary': [], 'observations': [{'day': start}], 'limitations': []}
+        with tempfile.TemporaryDirectory() as temp:
+            service = ValidationService(Path(temp), calculator=calculate, identity=lambda *args: identity[0])
+            with patch.object(service, 'request', return_value=('20260915', '20260917', '20260918', '20260916', (1,))):
+                job = service.start({})
+            service.pool.shutdown(wait=True)
+            ready = service.status(job['id'])
+            self.assertEqual((ready['status'], ready['result']['observationCount']), ('done', 1))
+            self.assertNotIn('observations', ready['result'])
+            self.assertEqual(service.frozen(ready['receipt'])['start'], '20260915')
+            identity[0] = 'source-b'
+            self.assertEqual(service.status(job['id'])['status'], 'stale')
+            with self.assertRaisesRegex(ValueError, '来源已变化'):
+                service.frozen(ready['receipt'])
+            with self.assertRaises(ValueError):
+                service.frozen('../bad')
+            stored = Path(temp)/'.level2_validation_receipts'/f"{ready['receipt']}.json"
+            content = json.loads(stored.read_text())
+            content['result']['summary'] = [{'forged': True}]
+            stored.write_text(json.dumps(content))
+            with self.assertRaisesRegex(ValueError, '内容校验失败'):
+                service.frozen(ready['receipt'])
 
     def test_equal_day_average_is_not_stock_count_weighted(self):
         flows = {

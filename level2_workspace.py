@@ -56,6 +56,7 @@ class Workspace:
         from level2_state import StateService
         self.state=StateService(self)
         self._patterns=None
+        self._validation=None
 
     @property
     def patterns(self):
@@ -63,6 +64,13 @@ class Workspace:
             from level2_patterns import PatternService
             self._patterns=PatternService(self)
         return self._patterns
+
+    @property
+    def validation(self):
+        if self._validation is None:
+            from level2_validation import ValidationService
+            self._validation=ValidationService(self.base)
+        return self._validation
 
     def window(self,day):
         from level2_contract import window
@@ -291,6 +299,10 @@ class Workspace:
             if not isinstance(codes,list) or len(codes)>200 or any(not isinstance(c,str) or c not in verified['details'] for c in codes):raise ValueError('形态图范围无效，最多200只已查看图')
             pattern_result={'result':verified['result'],'details':{c:verified['details'][c] for c in codes}}
         context['patterns']=pattern_result
+        validation_result=None
+        if request.get('validationReceipt'):
+            validation_result=self.validation.frozen(request['validationReceipt'])
+        context['validation']=validation_result
         ui=request.get('patternUI',{})
         if not isinstance(ui,dict) or len(encoded(ui))>10000:raise ValueError('形态视图参数无效')
         context['patternUI']=ui
@@ -302,11 +314,11 @@ class Workspace:
         provenance=self.report_path(day).with_suffix('.provenance.json')
         bundle={'id':identifier,'day':day,'savedAt':saved,'chartCount':len(charts),'report':data,'filters':filters,
                 'stateViews':views,
-                'patterns':pattern_result,'patternUI':ui,
+                'patterns':pattern_result,'patternUI':ui,'validation':validation_result,
                 'charts':receipts,'states':states,'stateWindow':state_window,'payloadSha256':digest(data),'htmlSha256':hashlib.sha256(html.encode()).hexdigest(),
                 'reportProvenance':json.loads(provenance.read_text()) if provenance.exists() else {'status':'UNKNOWN_GENERATION_LINEAGE'},
                 'sourcesObservedAtSave':self.sources(day),
-                'scope':'整份当前报告与已加载详情；只冻结本次页面已成功读取的图表；其余明确未保存。历史日期快照不是历史当时可得性证明。'}
+                'scope':'整份当前报告与已加载详情；只冻结本次页面已成功读取的图表、观察窗口、形态和后续研究摘要；其余明确未保存。历史日期快照不是历史当时可得性证明。'}
         directory=self.snapshot_path(identifier);directory.mkdir(parents=True,exist_ok=False)
         (directory/'bundle.json').write_text(encoded(bundle))
         (directory/'report.html').write_text(html)
@@ -341,5 +353,6 @@ class Workspace:
                 'stateWindow':frozen_context.get('stateWindow'),
                 'charts':frozen_context.get('charts',{}),
                 'patterns':frozen_context.get('patterns'),
+                'validation':frozen_context.get('validation'),
                 'patternUI':frozen_context.get('patternUI',{}),
                 'filters':frozen_context.get('filters',{}),'scope':bundle['scope']}
