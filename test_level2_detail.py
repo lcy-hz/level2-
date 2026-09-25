@@ -65,6 +65,29 @@ class DetailTests(unittest.TestCase):
         self.assertIsNotNone(result['quotePath']['segments'][0]['medianMicropricePremiumBps'])
         self.assertIsNotNone(result['quotePath']['segments'][0]['medianWeightedTenImbalancePct'])
         self.assertEqual(result['tradePrintDrawdown']['status'], 'MISSING_SEQUENCE')
+        self.assertEqual([item['status'] for item in result['orderLinkAudit']], ['MISSING_FIELD', 'MISSING_FIELD'])
+        self.assertIsNone(result['orderLinkAudit'][0]['matchedTrades'])
+
+    def test_order_key_audit_reports_candidate_overlap_without_identity_claim(self):
+        path = self.root / f'order_raw_{self.day}.parquet'
+        con = duckdb.connect()
+        orders = pd.DataFrame([
+            ['600000.SH', self.day, '0', 'B', '120', '0', '11'],
+            ['600000.SH', self.day, '0', 'B', '30', '0', '11'],
+            ['600000.SH', self.day, '1', 'S', '20', '0', '14'],
+        ], columns=['万得代码', '自然日', '委托类型', '委托代码', '委托数量', '委托编号', '交易所委托号'])
+        con.register('orders_with_keys', orders)
+        con.execute('COPY orders_with_keys TO ? (FORMAT PARQUET)', [str(path)])
+        con.close()
+        result = calculate('600000.SH', self.day, self.expected, lambda _: None, self.root)
+        native, exchange = result['orderLinkAudit']
+        self.assertEqual(native['status'], 'NO_VALID_KEYS')
+        self.assertEqual(native['matchedTrades'], 0)
+        self.assertEqual(exchange['status'], 'AVAILABLE')
+        self.assertEqual((exchange['orderRows'], exchange['validOrderRows'], exchange['candidateKeys']), (3, 3, 2))
+        self.assertEqual((exchange['repeatedKeyGroups'], exchange['multiCodeKeyGroups']), (1, 0))
+        self.assertEqual((exchange['eligibleTrades'], exchange['matchedTrades'], exchange['sameCodeMatches']), (2, 2, 2))
+        self.assertEqual((exchange['singleRowSameCodeMatches'], exchange['repeatedKeyMatchedTrades']), (1, 1))
 
     def test_trade_print_path_requires_order_and_valid_prices(self):
         rows = [(1, 93000000, 120000, 100), (2, 93000000, 100000, 100),

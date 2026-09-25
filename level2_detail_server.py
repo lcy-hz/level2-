@@ -51,6 +51,49 @@ def source_identity(day, root=SOURCE):
     return hashlib.sha256(json.dumps(identity).encode()).hexdigest()
 
 
+def order_key_audit(con, path, day, code):
+    """Per-stock candidate key intersections, never an order identity decision."""
+    fields = ('委托编号', '交易所委托号')
+    columns = {row[0] for row in con.execute('DESCRIBE SELECT * FROM read_parquet(?)', [str(path)]).fetchall()}
+    order_rows = con.execute('SELECT COUNT(*) FROM read_parquet(?) WHERE "万得代码"=? AND "自然日"=?',
+                             [str(path), code, day]).fetchone()[0]
+    eligible = con.execute("SELECT COUNT(*) FROM ticks WHERE side IN ('B','S') AND pid>0").fetchone()[0]
+    output = []
+    for field in fields:
+        base = {'field': field, 'orderRows': order_rows, 'eligibleTrades': eligible,
+                'validOrderRows': None, 'candidateKeys': None, 'repeatedKeyGroups': None,
+                'multiCodeKeyGroups': None, 'matchedTrades': None, 'sameCodeMatches': None,
+                'singleRowSameCodeMatches': None, 'repeatedKeyMatchedTrades': None}
+        if field not in columns:
+            output.append({**base, 'status': 'MISSING_FIELD'})
+            continue
+        con.execute(f'''CREATE OR REPLACE TEMP TABLE order_key_audit AS
+            SELECT TRY_CAST("{field}" AS BIGINT) pid, COUNT(*) nrows,
+              COUNT(DISTINCT "委托代码") codes,
+              MAX(CASE WHEN "委托代码"='B' THEN 1 ELSE 0 END) has_b,
+              MAX(CASE WHEN "委托代码"='S' THEN 1 ELSE 0 END) has_s
+            FROM read_parquet(?) WHERE "万得代码"=? AND "自然日"=?
+              AND TRY_CAST("{field}" AS BIGINT)>0 GROUP BY 1''', [str(path), code, day])
+        key_count, valid_rows, repeated, multi_code = con.execute('''SELECT COUNT(*),
+            COALESCE(SUM(nrows),0),COUNT(*) FILTER(WHERE nrows>1),
+            COUNT(*) FILTER(WHERE codes>1) FROM order_key_audit''').fetchone()
+        matched, same_code, single_row, repeated_trades = con.execute('''SELECT
+            COUNT(*) FILTER(WHERE o.pid IS NOT NULL),
+            COUNT(*) FILTER(WHERE (t.side='B' AND o.has_b=1) OR (t.side='S' AND o.has_s=1)),
+            COUNT(*) FILTER(WHERE o.nrows=1 AND ((t.side='B' AND o.has_b=1) OR (t.side='S' AND o.has_s=1))),
+            COUNT(*) FILTER(WHERE o.nrows>1)
+            FROM ticks t LEFT JOIN order_key_audit o USING(pid)
+            WHERE t.side IN ('B','S') AND t.pid>0''').fetchone()
+        output.append({**base, 'status': 'AVAILABLE' if key_count else 'NO_VALID_KEYS',
+                       'validOrderRows': valid_rows, 'candidateKeys': key_count,
+                       'repeatedKeyGroups': repeated, 'multiCodeKeyGroups': multi_code,
+                       'matchedTrades': matched, 'sameCodeMatches': same_code,
+                       'singleRowSameCodeMatches': single_row,
+                       'repeatedKeyMatchedTrades': repeated_trades})
+    con.execute('DROP TABLE IF EXISTS order_key_audit')
+    return output
+
+
 def calculate(code, day, expected, progress, root=SOURCE):
     before = source_identity(day, root)
     con = duckdb.connect()
@@ -94,6 +137,8 @@ def calculate(code, day, expected, progress, root=SOURCE):
         if not rows or any(bad or bad_date for _, _, _, _, bad, bad_date in rows):
             raise ValueError('order_raw 为空或日期/数量异常，未发布不完整结果')
         orders = [{'t': t, 's': s, 'r': r, 'q': round(q)} for t, s, r, q, _, _ in rows]
+        progress('正在审计该股两种委托编号的候选字段交集…')
+        order_link = order_key_audit(con, root / f'order_raw_{day}.parquet', day, code)
         progress('正在核对该股盘口快照的买卖一档中间价路径…')
         quote_fields = ['自然日', '时间', '申买价1', '申卖价1', '申买量1', '申卖量1']
         quote_fields += [f'申买价{i}' for i in range(2, 11)]
@@ -110,12 +155,13 @@ def calculate(code, day, expected, progress, root=SOURCE):
         return {'code': code, 'day': day, 'sourceIdentity': before,
                 'computedAt': datetime.now(timezone.utc).isoformat(),
                 'segments': segments, 'parents': parents, 'orders': orders,
+                'orderLinkAudit': order_link,
                 'quotePath': quotes, 'tradePrintDrawdown': trade_path,
                 'regularCoverage': round(sum(r[1] for r in con.execute('''SELECT 1,SUM(price*qty) FROM ticks
                    WHERE (t BETWEEN 93000000 AND 113000000) OR (t BETWEEN 130000000 AND 150000000)''').fetchall() if r[1] is not None) / amount * 100, 2),
                 'tradeRows': count, 'amount': round(amount), 'net': round(net) if net is not None else None,
                 'knownNet':round(known_net),'unknownAmount':round(unknown),'parentIdentityStatus':'UNVERIFIED_NO_CHANNEL',
-                'note': '仅报告日局部深查；关联分组缺少频道和经济订单身份验证；未知编号按成交条数计数，未混入大单；order_raw 类型未解码为补撤单。'}
+                'note': '仅报告日局部深查；两种委托编号只做候选字段匹配，委托代码同字母也不证明经济订单身份；缺少频道和订单生命周期语义。未知编号按成交条数计数，未混入大单；order_raw 类型未解码为补撤单。'}
     finally:
         con.close()
 

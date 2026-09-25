@@ -98,6 +98,8 @@ class WorkspaceTests(unittest.TestCase):
         detail={'code':'000001.SZ','day':'20260907','tradeRows':42,'amount':1000,'net':30,
                 'segments':[{'s':'09:30–10:00','a':1000,'n':30,'v':12.0}],
                 'parents':[{'b':'<5万','n':30,'c':2}], 'orders':[{'t':'0','s':'B','r':1,'q':100}],
+                'orderLinkAudit':[{'field':'交易所委托号','status':'AVAILABLE','eligibleTrades':42,
+                                   'matchedTrades':24,'sameCodeMatches':20}],
                 'quotePath':{'status':'AVAILABLE','source':'/test/snapshot.parquet',
                              'segments':[{'s':'09:30–10:00','midChangePct':.5,'valid':20,'observed':20,
                                           'medianMicropricePremiumBps':.3,'medianWeightedTenImbalancePct':-8,
@@ -120,7 +122,11 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(frozen['quotePath']['segments'][0]['medianWeightedTenImbalancePct'],-8)
         self.assertEqual(frozen['quotePath']['segments'][0]['bidDisplayedRecovery']['recovered'],1)
         self.assertEqual(frozen['tradePrintDrawdown']['valuePct'],-1.5)
+        self.assertEqual(frozen['orderLinkAudit'][0]['matchedTrades'],24)
         forged=copy.deepcopy(data);forged['cards'][0]['detailEvidence']['tradeRows']=999
+        with self.assertRaisesRegex(ValueError,'完整深查证据'):
+            self.w.save({'day':'20260907','data':forged})
+        forged=copy.deepcopy(data);forged['cards'][0]['detailEvidence']['orderLinkAudit'][0]['matchedTrades']=25
         with self.assertRaisesRegex(ValueError,'完整深查证据'):
             self.w.save({'day':'20260907','data':forged})
         forged=copy.deepcopy(data);forged['cards'][0]['detailEvidence']['tradePrintDrawdown']['valuePct']=-5
