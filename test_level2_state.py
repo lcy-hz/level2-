@@ -11,6 +11,26 @@ DAYS=['20260916','20260917','20260918','20260921','20260922']
 def row(ratio,amount=100):return {'ratio':ratio,'amount':amount,'net':amount*ratio/100,'unknown':0,'adjusted':100}
 
 class StateTests(unittest.TestCase):
+    def test_price_bars_preserve_missing_close_for_entry_gate(self):
+        from level2_paths import PATHS
+        from level2_validation import entry_gate
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp)
+            (root/'20260922_stk_factor_pro.csv').write_text(
+                'ts_code,trade_date,open,high,low,close,vol,adj_factor\n'
+                '000001.SZ,20260922,10,11,9,10,100,2\n'
+                '000002.SZ,20260922,10,11,9,,100,2\n')
+            service=StateService(SimpleNamespace(base=root,root=root))
+            try:
+                with patch.dict(PATHS,{'stk_factor_pro':root}):
+                    prices,bars=service.price_bars('20260922')
+                    self.assertEqual(service.prices('20260922'),prices)
+                self.assertEqual(prices,{'000001.SZ':20})
+                self.assertEqual(entry_gate(bars['000001.SZ']),'PRICE_REFERENCE_ONLY')
+                self.assertEqual(entry_gate(bars['000002.SZ']),'MISSING_PRICE')
+            finally:
+                service.pool.shutdown()
+
     def test_weighted(self):
         s=compute({DAYS[-2]:row(10,100),DAYS[-1]:row(-10,900)},DAYS,DAYS[-1],2)
         self.assertAlmostEqual(s['weighted'],-8)

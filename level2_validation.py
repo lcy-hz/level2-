@@ -30,6 +30,27 @@ def _return(start, end):
     return 100 * (end / start - 1)
 
 
+def entry_gate(bar):
+    """Necessary next-session bar checks; never a fill or execution decision."""
+    if bar is None:
+        return 'MISSING_BAR'
+    try:
+        open_price, high, low, close, volume = bar
+    except (TypeError, ValueError):
+        return 'MISSING_BAR'
+    if not all(_price(value) for value in (open_price, high, low, close)):
+        return 'MISSING_PRICE'
+    if high < max(open_price, close) or low > min(open_price, close) or high < low:
+        return 'INVALID_OHLC'
+    if not isinstance(volume, (int, float)) or not math.isfinite(volume):
+        return 'UNKNOWN_VOLUME'
+    if volume <= 0:
+        return 'NO_VOLUME'
+    if open_price == high == low == close:
+        return 'ONE_PRICE_SESSION'
+    return 'PRICE_REFERENCE_ONLY'
+
+
 def _file_hash(path):
     digest = hashlib.sha256()
     with Path(path).open('rb') as source:
@@ -39,7 +60,7 @@ def _file_hash(path):
 
 
 def study(flows, prices, days, start, end, asof, split, horizons=(1, 3, 5),
-          collect_observations=True, on_observation=None):
+          collect_observations=True, on_observation=None, bars=None):
     """Use adjacent calendar sessions and frozen signal-day facts only.
 
     `split` is the final training date. Training events whose longest outcome
@@ -59,10 +80,11 @@ def study(flows, prices, days, start, end, asof, split, horizons=(1, 3, 5),
         raise ValueError('起点前须有一交易日用于形成事件')
 
     observations, missing_sources = [], []
+    bars = bars or {}
     aggregates = defaultdict(lambda: {'events': 0, 'observed': 0, 'pending': 0, 'missingPrice': 0,
                                       'returns': [], 'positive': 0, 'benchmarkSum': 0,
                                       'excessSum': 0, 'excessN': 0, 'daily': defaultdict(lambda: [0, 0]),
-                                      'signalDays': set()})
+                                      'signalDays': set(), 'entryGates': defaultdict(int)})
     observation_count = 0
     signal_days = days[index[start]:index[end] + 1]
     for day in signal_days:
@@ -78,6 +100,7 @@ def study(flows, prices, days, start, end, asof, split, horizons=(1, 3, 5),
         events = [(code, rule) for code, rule in events if rule]
         cohort = ('TRAIN' if i + max_horizon <= split_idx else
                   'EMBARGO' if i <= split_idx else 'OUT_OF_SAMPLE')
+        entry_day = days[i + 1] if i + 1 < len(days) else None
         for horizon in horizons:
             target = days[i + horizon] if i + horizon < len(days) else None
             maturity = target is not None and i + horizon <= asof_idx
@@ -90,8 +113,11 @@ def study(flows, prices, days, start, end, asof, split, horizons=(1, 3, 5),
             for code, rule in events:
                 outcome = _return(current_prices.get(code), target_prices.get(code)) if maturity else None
                 status = 'PENDING' if not maturity else 'MISSING_PRICE' if outcome is None else 'OBSERVED'
+                gate = (entry_gate(bars.get(entry_day, {}).get(code))
+                        if entry_day is not None and i + 1 <= asof_idx else 'PENDING')
                 item = {'day': day, 'code': code, 'rule': rule, 'cohort': cohort,
                         'horizon': horizon, 'targetDay': target, 'status': status,
+                        'entryDay': entry_day, 'entryGate': gate,
                         'previousRatio': previous[code]['ratio'], 'currentRatio': current[code]['ratio'],
                         'deltaPP': current[code]['ratio'] - previous[code]['ratio'],
                         'triggerClose': current_prices.get(code) if _price(current_prices.get(code)) else None,
@@ -106,6 +132,7 @@ def study(flows, prices, days, start, end, asof, split, horizons=(1, 3, 5),
                     on_observation(item)
                 group = aggregates[(cohort, rule, horizon)]
                 group['events'] += 1
+                group['entryGates'][gate] += 1
                 if status == 'PENDING':
                     group['pending'] += 1
                 elif status == 'MISSING_PRICE':
@@ -130,6 +157,7 @@ def study(flows, prices, days, start, end, asof, split, horizons=(1, 3, 5),
                         'events': group['events'], 'observed': n,
                         'pending': group['pending'], 'missingPrice': group['missingPrice'],
                         'signalDays': len(group['signalDays']),
+                        'entryGateCounts': dict(sorted(group['entryGates'].items())),
                         'benchmarkPoolMeanN': group['benchmarkSum'] / n if n else None,
                         'meanReturnPct': statistics.mean(values) if values else None,
                         'medianReturnPct': statistics.median(values) if values else None,
@@ -143,7 +171,8 @@ def study(flows, prices, days, start, end, asof, split, horizons=(1, 3, 5),
             'summary': summary, 'observations': observations, 'observationCount': observation_count,
             'limitations': ['事件仅在收盘日级数据就绪后可识别，收盘至收盘收益不是可成交策略收益',
                             'close×adj_factor 的历史当时可得性未验证；复权因子修订可改变回看结果',
-                            '无入场成交、涨跌停排队、停牌退出、手续费、滑点或容量模型',
+                            '次日开盘日线门槛只检查价格、量和单一价位；即使通过也不证明可成交',
+                            '无实际订单回报、涨跌停排队、停牌退出、手续费、滑点或容量模型；不展示执行收益',
                             '基准为同日有效方向且有价格的股票等权均值，不是行业或风格匹配对照',
                             '重叠事件和同日股票相关；按信号日等权的超额均值仅供描述，不作显著性证明']}
 
@@ -202,9 +231,12 @@ def local_study(start, end, asof, split, horizons=(1, 3, 5),
             if source['status'] not in ('MISSING', 'UNCOMMITTED', 'UNKNOWN_SCHEMA'):
                 flows[day] = rows
             sources.append(source)
-        prices = {day: state.prices(day) for day in price_days}
+        prices,bars={},{}
+        for day in price_days:
+            prices[day],bars[day]=state.price_bars(day)
         result = study(flows, prices, days, start, end, asof, split, horizons,
-                       collect_observations=collect_observations, on_observation=on_observation)
+                       collect_observations=collect_observations, on_observation=on_observation,
+                       bars=bars)
         if before != study_identity(start, end, asof, split, horizons):
             raise ValueError('研究期间输入来源变化，结果未发布')
         result['sourceIdentity'] = before
@@ -263,10 +295,12 @@ class ValidationService:
                     with connection:
                         connection.execute('''CREATE TABLE observation (
                             code TEXT, day TEXT, rule TEXT, cohort TEXT, horizon INTEGER, targetDay TEXT,
+                            entryDay TEXT, entryGate TEXT,
                             status TEXT, previousRatio REAL, currentRatio REAL, deltaPP REAL,
                             triggerClose REAL, targetClose REAL, returnPct REAL, benchmarkPct REAL,
                             excessPct REAL, benchmarkN INTEGER)''')
-                        columns = ('code', 'day', 'rule', 'cohort', 'horizon', 'targetDay', 'status',
+                        columns = ('code', 'day', 'rule', 'cohort', 'horizon', 'targetDay',
+                                   'entryDay', 'entryGate', 'status',
                                    'previousRatio', 'currentRatio', 'deltaPP', 'triggerClose', 'targetClose',
                                    'returnPct', 'benchmarkPct', 'excessPct', 'benchmarkN')
                         buffer = []

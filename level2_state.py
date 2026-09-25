@@ -247,21 +247,35 @@ class StateService:
         tmp=dest.with_suffix('.tmp');tmp.write_text(dump(rows));tmp.replace(dest)
         return rows,{'day':day,'status':source_status,'source':str(p)}
 
-    def prices(self,day):
+    def _price_data(self,day,include_bars=False):
         from level2_paths import PATHS
         p=PATHS['stk_factor_pro']/f'{day}_stk_factor_pro.csv'
-        if not p.exists():return {}
-        result={}
+        if not p.exists():return {},{}
+        result={};bars={}
         with p.open(newline='') as f:
             for row in csv.DictReader(f):
                 if row.get('trade_date')!=day:continue
+                code=row['ts_code']
+                if include_bars:
+                    if code in bars:raise ValueError('日线股票日期重复：'+code)
+                    def value(name):
+                        try:number=float(row[name])
+                        except (KeyError,TypeError,ValueError):return None
+                        return number if math.isfinite(number) else None
+                    bars[code]=tuple(value(key) for key in ('open','high','low','close','vol'))
                 try:v=float(row['close'])*float(row['adj_factor'])
-                except (ValueError,KeyError):continue
+                except (ValueError,TypeError,KeyError):continue
                 if math.isfinite(v) and v>0:
-                    code=row['ts_code']
                     if code in result:raise ValueError('价格表股票日期重复：'+code)
                     result[code]=v
-        return result
+        return result,bars
+
+    def prices(self,day):
+        return self._price_data(day)[0]
+
+    def price_bars(self,day):
+        """One read for adjusted closes and unadjusted OHLC/volume quality gates."""
+        return self._price_data(day,include_bars=True)
 
     def price_source(self,day):
         from level2_paths import PATHS

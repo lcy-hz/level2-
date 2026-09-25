@@ -220,8 +220,10 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_snapshot_freezes_verified_validation_without_live_backfill(self):
         study={'start':'20260901','end':'20260907','asof':'20260907','split':'20260905',
-               'summary':[{'rule':'SELL_EASING','observed':12}], 'sourceIdentity':'fixture'}
-        detail={'code':'000001.SZ','observations':[{'day':'20260907','horizon':1,'returnPct':None,'status':'PENDING'}]}
+               'summary':[{'rule':'SELL_EASING','observed':12,'entryGateCounts':{'PRICE_REFERENCE_ONLY':10,'ONE_PRICE_SESSION':2}}],
+               'sourceIdentity':'fixture'}
+        detail={'code':'000001.SZ','observations':[{'day':'20260907','horizon':1,'returnPct':None,
+                                                   'status':'PENDING','entryDay':'20260908','entryGate':'PENDING'}]}
         self.w._validation=SimpleNamespace(frozen=lambda token: study if token=='a'*32 else self._invalid_validation(),
                                            details=lambda token,codes: {'000001.SZ':detail})
         saved=self.w.save({'day':'20260907','data':self.data,'validationReceipt':'a'*32,
@@ -229,6 +231,7 @@ class WorkspaceTests(unittest.TestCase):
         frozen=self.w.snapshot_document(saved['id'])
         self.assertEqual(frozen['validation'],study)
         self.assertEqual(frozen['validationDetails']['000001.SZ'],detail)
+        self.assertEqual(frozen['validation']['summary'][0]['entryGateCounts']['ONE_PRICE_SESSION'],2)
         self.assertEqual(frozen['patternUI']['tab'],'validation')
         with self.assertRaises(ValueError):
             self.w.save({'day':'20260907','data':self.data,'validationReceipt':'b'*32})

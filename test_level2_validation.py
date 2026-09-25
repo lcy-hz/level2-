@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-from level2_validation import study, ValidationService
+from level2_validation import study, ValidationService, entry_gate
 
 
 DAYS = ['20260914', '20260915', '20260916', '20260917', '20260918',
@@ -16,6 +16,37 @@ def flow(ratio):
 
 
 class ValidationTests(unittest.TestCase):
+    def test_next_day_bar_gate_never_claims_fill(self):
+        self.assertEqual(entry_gate(None), 'MISSING_BAR')
+        self.assertEqual(entry_gate((None, 11, 9, 10, 100)), 'MISSING_PRICE')
+        self.assertEqual(entry_gate((10, 9, 8, 10, 100)), 'INVALID_OHLC')
+        self.assertEqual(entry_gate((10, 11, 9, 10, None)), 'UNKNOWN_VOLUME')
+        self.assertEqual(entry_gate((10, 11, 9, 10, 0)), 'NO_VOLUME')
+        self.assertEqual(entry_gate((10, 10, 10, 10, 100)), 'ONE_PRICE_SESSION')
+        self.assertEqual(entry_gate((10, 11, 9, 10, 100)), 'PRICE_REFERENCE_ONLY')
+
+    def test_entry_gate_is_distinct_from_close_to_close_outcome(self):
+        flows = {'20260914': {'A': flow(-4)}, '20260915': {'A': flow(-2)},
+                 '20260916': {'A': flow(-2)}}
+        prices = {'20260915': {'A': 100}, '20260916': {'A': 110}}
+        bars = {'20260916': {'A': (110, 110, 110, 110, 100)}}
+        result = study(flows, prices, DAYS, '20260915', '20260916', '20260916',
+                       '20260915', (1,), bars=bars)
+        item = result['observations'][0]
+        self.assertEqual((item['entryDay'], item['entryGate']), ('20260916', 'ONE_PRICE_SESSION'))
+        self.assertEqual(item['status'], 'OBSERVED')
+        self.assertAlmostEqual(item['returnPct'], 10)
+        self.assertEqual(result['summary'][0]['entryGateCounts'], {'ONE_PRICE_SESSION': 1})
+        baseline = study(flows, prices, DAYS, '20260915', '20260916', '20260916',
+                         '20260915', (1,))
+        for field in ('meanReturnPct', 'meanExcessPct', 'equalDayMeanExcessPct', 'observed'):
+            self.assertEqual(result['summary'][0][field], baseline['summary'][0][field])
+        pending_flows = {**flows, '20260916': {'A': flow(2)}}
+        pending = next(item for item in study(pending_flows, prices, DAYS, '20260915', '20260916',
+                                              '20260916', '20260915', (1,), bars=bars)['observations']
+                       if item['day'] == '20260916')
+        self.assertEqual((pending['entryGate'], pending['status']), ('PENDING', 'PENDING'))
+
     def test_event_is_signal_day_only_and_future_is_separate(self):
         flows = {
             '20260914': {'A': flow(-4), 'B': flow(-4)},
@@ -85,7 +116,8 @@ class ValidationTests(unittest.TestCase):
         identity = ['source-a']
         def calculate(start, end, asof, split, horizons, collect_observations=True, on_observation=None):
             observation = {'day': start, 'code': '000001.SZ', 'rule': 'SELL_EASING',
-                           'horizon': 1, 'status': 'OBSERVED', 'returnPct': 2.5}
+                           'horizon': 1, 'status': 'OBSERVED', 'returnPct': 2.5,
+                           'entryDay': '20260916', 'entryGate': 'ONE_PRICE_SESSION'}
             if on_observation:on_observation(observation)
             return {'start': start, 'end': end, 'asof': asof, 'split': split,
                     'horizons': list(horizons), 'sourceIdentity': identity[0],
@@ -103,6 +135,8 @@ class ValidationTests(unittest.TestCase):
             self.assertEqual(service.frozen(ready['receipt'])['start'], '20260915')
             detail = service.detail(ready['receipt'], '000001.SZ')
             self.assertEqual((detail['status'], detail['observations'][0]['returnPct']), ('AVAILABLE', 2.5))
+            self.assertEqual((detail['observations'][0]['entryDay'], detail['observations'][0]['entryGate']),
+                             ('20260916', 'ONE_PRICE_SESSION'))
             self.assertEqual(service.detail(ready['receipt'], '000002.SZ')['status'], 'NO_EVENT')
             with self.assertRaises(ValueError):
                 service.detail(ready['receipt'], '../bad')

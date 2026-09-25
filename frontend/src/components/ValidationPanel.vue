@@ -125,13 +125,15 @@ async function loadDetail(code = null) {
 }
 const point = value => Number.isFinite(value) ? `${value > 0 ? '+' : ''}${value.toFixed(2)} pp` : '未知'
 const resultLabel = row => row.status === 'PENDING' ? '未到期' : row.status === 'MISSING_PRICE' ? '价格缺失' : formatPct(row.returnPct)
+const entryGateName = { PENDING: '次日未到', MISSING_BAR: '缺日线', MISSING_PRICE: '价缺失', INVALID_OHLC: '价关系异常', UNKNOWN_VOLUME: '量未知', NO_VOLUME: '零成交量', ONE_PRICE_SESSION: '单一价位', PRICE_REFERENCE_ONLY: '仅价格参考' }
+const entryCounts = row => row.entryGateCounts ? Object.entries(row.entryGateCounts).map(([key, count]) => `${entryGateName[key] || key} ${count}`).join(' · ') : '旧结果未保存'
 onBeforeUnmount(() => { sequence++; detailSequence++; clearTimeout(timer) })
 </script>
 
 <template>
   <section class="panel validation-panel" aria-labelledby="validation-title">
     <div class="section-heading"><div><span class="eyebrow">OUTCOME STUDY · RESEARCH ONLY</span><h2 id="validation-title">事件后续验证</h2></div><span class="hint">训练／隔离／样本外明确分开</span></div>
-    <p class="footnote">固定比较日级主动成交事件触发后 1／3／5 个交易日的收盘到收盘价格变化；事件只在触发日数据就绪后可识别。这里不是买点、卖点或可成交收益。</p>
+    <p class="footnote">固定比较日级主动成交事件触发后 1／3／5 个交易日的收盘到收盘价格变化；事件只在触发日数据就绪后可识别。次日日线门槛只检查可观察性及单一价位，不证明排队成交。这里不是买点、卖点或可成交收益。</p>
     <div v-if="!frozen" class="validation-controls">
       <label>事件起点<input v-model.trim="fields.start" inputmode="numeric" maxlength="8" aria-label="事件起点 YYYYMMDD" /></label>
       <label>训练截止<input v-model.trim="fields.split" inputmode="numeric" maxlength="8" aria-label="训练截止 YYYYMMDD" /></label>
@@ -145,7 +147,7 @@ onBeforeUnmount(() => { sequence++; detailSequence++; clearTimeout(timer) })
       <p class="footnote">请求 {{ result.signalDaysRequested }} 个事件日；Level‑2 缺档 {{ result.signalDaysMissingFlow.length }} 日；累计事件×期限 {{ result.observationCount?.toLocaleString() ?? '旧结果未记录' }} 条。{{ frozen ? '此结果只使用快照保存时的来源。' : '调整上方日期后，只有重新计算才更新下方结果。' }}</p>
       <p v-if="result.signalDaysMissingFlow.length" class="footnote">缺档日期：{{ result.signalDaysMissingFlow.map(item => item.day).join('、') }}；缺档不跨越形成事件。</p>
       <div class="validation-filters"><label>样本分段<select v-model="selectedCohort"><option v-for="(name, key) in cohortName" :key="key" :value="key">{{ name }}</option></select></label><label>后续交易日<select v-model.number="selectedHorizon"><option v-for="day in horizons" :key="day" :value="day">后 {{ day }} 日</option></select></label><span>{{ cohortName[selectedCohort] }} · 已观察 {{ counts.observed.toLocaleString() }} 条 · 未到期 {{ counts.pending.toLocaleString() }} 条 · 各类最多 {{ counts.days }} 个事件日</span></div>
-      <div v-if="rows.length" class="table-scroll"><table class="validation-table"><thead><tr><th>事件</th><th>触发数</th><th>已观察／未到期／缺价格</th><th>事件日</th><th>平均收益</th><th>同日基准超额</th><th>按事件日等权超额</th><th>基准平均覆盖</th></tr></thead><tbody><tr v-for="row in rows" :key="row.rule"><td>{{ ruleName[row.rule] || row.rule }}</td><td>{{ row.events.toLocaleString() }}</td><td>{{ row.observed.toLocaleString() }} / {{ row.pending.toLocaleString() }} / {{ row.missingPrice.toLocaleString() }}</td><td>{{ row.signalDays }}</td><td>{{ formatPct(row.meanReturnPct) }}</td><td>{{ formatPct(row.meanExcessPct) }}</td><td>{{ formatPct(row.equalDayMeanExcessPct) }}</td><td>{{ row.benchmarkPoolMeanN == null ? '未知' : row.benchmarkPoolMeanN.toFixed(0) + ' 只' }}</td></tr></tbody></table></div>
+      <div v-if="rows.length" class="table-scroll"><table class="validation-table"><thead><tr><th>事件</th><th>触发数</th><th>已观察／未到期／缺价格</th><th>次日日线门槛</th><th>事件日</th><th>平均收益</th><th>同日基准超额</th><th>按事件日等权超额</th><th>基准平均覆盖</th></tr></thead><tbody><tr v-for="row in rows" :key="row.rule"><td>{{ ruleName[row.rule] || row.rule }}</td><td>{{ row.events.toLocaleString() }}</td><td>{{ row.observed.toLocaleString() }} / {{ row.pending.toLocaleString() }} / {{ row.missingPrice.toLocaleString() }}</td><td>{{ entryCounts(row) }}</td><td>{{ row.signalDays }}</td><td>{{ formatPct(row.meanReturnPct) }}</td><td>{{ formatPct(row.meanExcessPct) }}</td><td>{{ formatPct(row.equalDayMeanExcessPct) }}</td><td>{{ row.benchmarkPoolMeanN == null ? '未知' : row.benchmarkPoolMeanN.toFixed(0) + ' 只' }}</td></tr></tbody></table></div>
       <p v-else class="footnote">此分段／期限没有已识别事件；不补零，也不推出无效结论。</p>
       <div class="validation-stock">
         <h3>个股事件与后续结果</h3>
@@ -159,7 +161,7 @@ onBeforeUnmount(() => { sequence++; detailSequence++; clearTimeout(timer) })
           <p v-if="selectedDetail.status === 'NO_EVENT'" class="footnote">没有识别到这四类事件，不代表该股没有其他价格或盘口结构。</p>
           <details v-for="(event, index) in evidenceDays" :key="event.day" :open="index === 0" class="validation-event">
             <summary>{{ event.day }} · {{ ruleName[event.rows[0].rule] || event.rows[0].rule }} · {{ cohortName[event.rows[0].cohort] }}</summary>
-            <p>前日净额比 {{ formatPct(event.rows[0].previousRatio) }} → 触发日 {{ formatPct(event.rows[0].currentRatio) }}；变化 {{ point(event.rows[0].deltaPP) }}。收益以 close×adj_factor 的比值计算；该绝对值不是可成交价格。</p>
+            <p>前日净额比 {{ formatPct(event.rows[0].previousRatio) }} → 触发日 {{ formatPct(event.rows[0].currentRatio) }}；变化 {{ point(event.rows[0].deltaPP) }}。次日 {{ event.rows[0].entryDay || '未覆盖' }} 日线门槛：{{ entryGateName[event.rows[0].entryGate] || '旧结果未保存' }}；通过也不等于成交。收益以 close×adj_factor 的比值计算；该绝对值不是可成交价格。</p>
             <div class="table-scroll"><table><thead><tr><th>期限</th><th>目标交易日</th><th>结果状态</th><th>后续收益</th><th>同日基准</th><th>超额</th></tr></thead><tbody><tr v-for="row in event.rows" :key="row.horizon"><td>后 {{ row.horizon }} 日</td><td>{{ row.targetDay || '日历未覆盖' }}</td><td>{{ row.status === 'OBSERVED' ? '已观察' : row.status === 'PENDING' ? '未到期' : '价格缺失' }}</td><td>{{ resultLabel(row) }}</td><td>{{ row.status === 'OBSERVED' ? formatPct(row.benchmarkPct) : '不可比较' }}</td><td>{{ row.status === 'OBSERVED' ? formatPct(row.excessPct) : '不可比较' }}</td></tr></tbody></table></div>
           </details>
         </template>
