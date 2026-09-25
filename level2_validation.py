@@ -80,7 +80,7 @@ def _file_hash(path):
 
 
 def study(flows, prices, days, start, end, asof, split, horizons=(1, 3, 5),
-          collect_observations=True, on_observation=None, bars=None):
+          collect_observations=True, on_observation=None, bars=None, flow_sources=None):
     """Use adjacent calendar sessions and frozen signal-day facts only.
 
     `split` is the final training date. Training events whose longest outcome
@@ -99,7 +99,7 @@ def study(flows, prices, days, start, end, asof, split, horizons=(1, 3, 5),
     if index[start] == 0:
         raise ValueError('起点前须有一交易日用于形成事件')
 
-    observations, missing_sources = [], []
+    observations, missing_sources, excluded_sources = [], [], []
     bars = bars or {}
     def daily_group():
         return {'events': 0, 'observed': 0, 'pending': 0, 'missingPrice': 0,
@@ -119,6 +119,13 @@ def study(flows, prices, days, start, end, asof, split, horizons=(1, 3, 5),
         if previous is None or current is None:
             missing_sources.append({'day': day, 'missing': [d for d in (prior, day) if d not in flows]})
             continue
+        if flow_sources is not None:
+            previous_source, current_source = flow_sources.get(prior), flow_sources.get(day)
+            permitted = {'NATIVE', 'LEGACY_CALIBRATED_ROW_GUARD'}
+            if previous_source not in permitted or current_source not in permitted or previous_source != current_source:
+                excluded_sources.append({'day': day, 'previousDay': prior,
+                                         'previousSource': previous_source, 'currentSource': current_source})
+                continue
         pool = {code for code in previous.keys() & current.keys()
                 if usable(previous[code]) and usable(current[code])}
         events = [(code, kind(previous[code], current[code])) for code in sorted(pool)]
@@ -220,10 +227,11 @@ def study(flows, prices, days, start, end, asof, split, horizons=(1, 3, 5),
                         'equalDayMeanExcessPct': (statistics.mean(row['meanExcessPct'] for row in daily_rows
                                                                  if row['meanExcessPct'] is not None)
                                                   if any(row['meanExcessPct'] is not None for row in daily_rows) else None)})
-    return {'method': 'DAILY_EVENT_CLOSE_TO_CLOSE_DESCRIPTIVE_1',
+    return {'method': 'DAILY_EVENT_CLOSE_TO_CLOSE_DESCRIPTIVE_2',
             'start': start, 'end': end, 'asof': asof, 'split': split,
             'horizons': list(horizons), 'embargoSessions': max_horizon,
             'signalDaysRequested': len(signal_days), 'signalDaysMissingFlow': missing_sources,
+            'signalDaysExcludedSource': excluded_sources,
             'summary': summary, 'observations': observations, 'observationCount': observation_count,
             'limitations': ['事件仅在收盘日级数据就绪后可识别，收盘至收盘收益不是可成交策略收益',
                             'close×adj_factor 的历史当时可得性未验证；复权因子修订可改变回看结果',
@@ -231,6 +239,7 @@ def study(flows, prices, days, start, end, asof, split, horizons=(1, 3, 5),
                             '最大收盘回撤要求触发日至目标日的每个复权收盘均有效；盘中极值和可成交路径未观察',
                             '无实际订单回报、涨跌停排队、停牌退出、手续费、滑点或容量模型；不展示执行收益',
                             '基准为同日有效方向且有价格的股票等权均值，不是行业或风格匹配对照',
+                            '只在相邻交易日均为同一种已核验 Level-2 来源时形成事件；跨来源日和未知来源日单列排除',
                             '重叠事件和同日股票相关；按信号日等权的超额均值仅供描述，不作显著性证明']}
 
 
@@ -293,7 +302,7 @@ def local_study(start, end, asof, split, horizons=(1, 3, 5),
             prices[day],bars[day]=state.price_bars(day)
         result = study(flows, prices, days, start, end, asof, split, horizons,
                        collect_observations=collect_observations, on_observation=on_observation,
-                       bars=bars)
+                       bars=bars, flow_sources={item['day']: item['status'] for item in sources})
         if before != study_identity(start, end, asof, split, horizons):
             raise ValueError('研究期间输入来源变化，结果未发布')
         result['sourceIdentity'] = before

@@ -128,6 +128,29 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(len(result['observations']), 0)
         self.assertEqual([x['day'] for x in result['signalDaysMissingFlow']], ['20260915', '20260916'])
 
+    def test_source_boundary_and_unknown_source_do_not_form_events(self):
+        flows = {day: {'A': flow(-4 + index)} for index, day in enumerate(DAYS[:5])}
+        prices = {day: {'A': 100 + index} for index, day in enumerate(DAYS[:5])}
+        sources = {'20260914': 'LEGACY_CALIBRATED_ROW_GUARD',
+                   '20260915': 'LEGACY_CALIBRATED_ROW_GUARD',
+                   '20260916': 'NATIVE', '20260917': 'NATIVE',
+                   '20260918': 'LEGACY_DIRECTION_UNKNOWN'}
+        result = study(flows, prices, DAYS, '20260915', '20260918', '20260918',
+                       '20260916', (1,), flow_sources=sources)
+        self.assertEqual([row['day'] for row in result['observations']],
+                         ['20260915', '20260917'])
+        self.assertEqual([row['day'] for row in result['signalDaysExcludedSource']],
+                         ['20260916', '20260918'])
+        self.assertEqual(result['signalDaysExcludedSource'][0],
+                         {'day': '20260916', 'previousDay': '20260915',
+                          'previousSource': 'LEGACY_CALIBRATED_ROW_GUARD',
+                          'currentSource': 'NATIVE'})
+        self.assertEqual(result['signalDaysMissingFlow'], [])
+        sources.pop('20260917')
+        without_source = study(flows, prices, DAYS, '20260915', '20260918', '20260918',
+                               '20260916', (1,), flow_sources=sources)
+        self.assertNotIn('20260917', [row['day'] for row in without_source['observations']])
+
     def test_training_purge_and_oos_are_calendar_based(self):
         flows = {d: {'A': flow(-10 + i)} for i, d in enumerate(DAYS)}
         prices = {d: {'A': 100 + i} for i, d in enumerate(DAYS)}
