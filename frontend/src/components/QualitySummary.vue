@@ -8,10 +8,11 @@ const rate = row => row?.eligibleRows > 0 ? `${(row.affectedRows / row.eligibleR
   <section class="panel" aria-labelledby="quality-title">
     <div class="section-heading"><div><span class="eyebrow">DATA INTEGRITY</span><h2 id="quality-title">数据门槛与口径</h2></div><span class="hint">发布通过 ≠ 原始行情无异常</span></div>
     <div class="quality-grid" :class="{ single: !quality }">
-      <div class="subpanel"><strong>发布门槛</strong><p>{{ gate.filter(row => row.files && row.manifest && row.committed).length }} / {{ gate.length }} 个交易日三表、manifest 与提交标识齐备；转换警告仍须逐日查看。</p></div>
+      <div class="subpanel"><strong>发布门槛</strong><p v-if="gate.length">{{ gate.filter(row => row.files && row.manifest && row.committed).length }} / {{ gate.length }} 个交易日三表、manifest 与提交标识齐备；转换警告仍须逐日查看。</p><p v-else>未保存逐日发布门槛；不能据此核验三表、manifest 与提交标识。</p></div>
       <div v-if="quality" class="subpanel"><strong>共同证券覆盖</strong><p>{{ count(quality.coverage?.intersection) }} / {{ count(quality.coverage?.union) }} 只；交并集按目标日三表统计。</p></div>
       <div v-if="quality" class="subpanel"><strong>未知方向成交金额</strong><p>{{ quality.direction?.unknownAmount == null ? '未知' : (quality.direction.unknownAmount / 1e8).toFixed(4) + ' 亿' }}；比例 {{ quality.direction?.unknownRate == null ? '未知' : (quality.direction.unknownRate * 100).toFixed(6) + '%' }}。</p></div>
       <div v-if="quality" class="subpanel"><strong>重复候选关联键</strong><p>{{ count(quality.candidateDuplicateKey?.groups) }} 组，涉及 {{ count(quality.candidateDuplicateKey?.affectedRows) }} 行；不能直接当作母单身份。</p></div>
+      <div class="subpanel"><strong>展示单位与方向</strong><p>页面价格统一为元、数量为股、金额为元；原始价格倍率按已识别来源分别校准，不直接混用。主动净额仅使用方向有效的买卖成交；零价格或方向未知记录不并入有效主动成交。</p></div>
     </div>
     <p v-if="!quality" class="footnote">此报告未保存目标日原始三表质量报告；只能查看已冻结的发布门槛，不把缺少的覆盖、时钟和关联键核验写成零，也不读取最新文件补齐。</p>
     <template v-if="quality">

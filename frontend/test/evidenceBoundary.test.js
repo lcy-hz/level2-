@@ -21,11 +21,18 @@ const gate = [{ day: '20260922', files: true, manifest: true, committed: true, w
 test('legacy snapshot without quality retains only frozen publication evidence', async () => {
   const html = await render(QualitySummary, { quality: null, gate })
   assert.match(html, /1 \/ 1 个交易日三表/)
+  assert.match(html, /页面价格统一为元、数量为股、金额为元/)
   assert.match(html, /未保存目标日原始三表质量报告/)
   assert.match(html, /逐日发布门槛与转换警告/)
   assert.doesNotMatch(html, /共同证券覆盖/)
   assert.doesNotMatch(html, /完全重复组/)
   assert.doesNotMatch(html, /候选委托字段匹配/)
+})
+
+test('missing publication gate remains unknown instead of zero of zero complete', async () => {
+  const html = await render(QualitySummary, { quality: null, gate: [] })
+  assert.match(html, /未保存逐日发布门槛；不能据此核验/)
+  assert.doesNotMatch(html, /0 \/ 0 个交易日三表/)
 })
 
 test('snapshot with saved quality preserves its measured coverage and raw table', async () => {
