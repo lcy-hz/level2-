@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 import duckdb
 from level2_contract import calendar,window,native_ticks,COMPLETE_NET,KNOWN_NET,UNKNOWN_AMOUNT,parent_query
-from level2_quality import inspect_day,render_quality
+from level2_quality import audit_raw_rows,inspect_day,render_quality
 
 class ContractTests(unittest.TestCase):
     def test_calendar_gap_and_duplicates_rejected(self):
@@ -57,9 +57,33 @@ class ContractTests(unittest.TestCase):
                               'groups':1,'affectedRows':2,'excessRows':1})
             self.assertEqual(q['snapshotPhysicalTimeRegressions'],
                              {'eligibleRows':4,'comparablePairs':3,'regressions':1,'affectedStocks':1})
+            self.assertEqual(q['dealExactDuplicates']['groups'],0)
+            self.assertEqual(q['orderRawExactDuplicates']['groups'],0)
+            self.assertEqual(q['dealPhysicalTimeRegressions']['regressions'],0)
+            self.assertEqual(q['orderRawPhysicalTimeRegressions']['regressions'],0)
             self.assertEqual(q['coverage']['intersection'],0)
             self.assertEqual(q['candidateDuplicateKey']['groups'],1)
             self.assertIn('数据质量',render_quality(q));c.close()
+
+    def test_full_raw_equality_and_file_clock_order_do_not_confuse_ties_or_invalid_times(self):
+        import pandas as pd
+        with tempfile.TemporaryDirectory() as temp:
+            path=Path(temp)/'deal_20260922.parquet';c=duckdb.connect();day='20260922'
+            df=pd.DataFrame([
+                ['000001.SZ',day,'93000000','A'],
+                ['000001.SZ',day,'93000000','A'],
+                ['000001.SZ',day,'93100000','B'],
+                ['000001.SZ',day,'93050000','C'],
+                ['000001.SZ',day,'96000000','D'],
+                ['000001.SZ','20260921','93000000','A'],
+                ['000002.SZ',day,'93000000','X'],
+                ['000002.SZ',day,'93000000','X'],
+            ],columns=['万得代码','自然日','时间','其他原始字段'])
+            c.register('raw',df);c.execute('COPY raw TO ? (FORMAT PARQUET)',[str(path)])
+            exact,physical=audit_raw_rows(c,path,day,{'000001.SZ','000002.SZ'},lambda _:None,batch_size=1)
+            self.assertEqual(exact,{'eligibleRows':None,'groups':2,'affectedRows':4,'excessRows':2,'affectedStocks':2})
+            self.assertEqual(physical,{'eligibleRows':6,'comparablePairs':4,'regressions':1,'affectedStocks':1})
+            c.close()
 
     def test_parent_key_preserves_security_and_day(self):
         c=duckdb.connect()

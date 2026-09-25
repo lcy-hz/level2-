@@ -3,6 +3,43 @@ from pathlib import Path
 import json
 from level2_contract import PAT, native_ticks, UNKNOWN_AMOUNT, KNOWN_NET
 
+def audit_raw_rows(con, path, day, codes, progress=print, batch_size=50):
+    """Exact raw-row equality and file-order clock regressions, batched by stock.
+
+    Every row of a stock is in the same batch, so an exact group cannot be
+    split. Parquet row-group stock statistics allow pruning without staging or
+    rewriting the source. Physical order is not exchange-event order.
+    """
+    exact=[0,0,0,0]; physical=[0,0,0,0]
+    codes=sorted(codes)
+    for offset in range(0,len(codes),batch_size):
+        batch=codes[offset:offset+batch_size]
+        marks=','.join('?' for _ in batch)
+        if offset==0 or offset//batch_size%20==0:
+            progress(f'quality {day} {path.stem.split("_")[0]} raw rows {offset}/{len(codes)} stocks')
+        row=con.execute(f'''WITH g AS (
+          SELECT *,COUNT(*) n FROM read_parquet(?)
+          WHERE "万得代码" IN ({marks}) GROUP BY ALL HAVING COUNT(*)>1
+        ) SELECT COUNT(*),COALESCE(SUM(n),0),COALESCE(SUM(n-1),0),
+          COUNT(DISTINCT "万得代码") FROM g''',[str(path),*batch]).fetchone()
+        exact=[a+b for a,b in zip(exact,row)]
+        row=con.execute(f'''WITH x AS (
+          SELECT "万得代码" code,TRY_CAST("时间" AS BIGINT) t,file_row_number r
+          FROM read_parquet(?,file_row_number=true)
+          WHERE "万得代码" IN ({marks}) AND "自然日"=?
+        ), valid AS (
+          SELECT * FROM x WHERE (t//100000)%100<60 AND (t//1000)%100<60
+          AND ((t BETWEEN 93000000 AND 113000000) OR (t BETWEEN 130000000 AND 150000000))
+        ), w AS (
+          SELECT code,t,LAG(t) OVER (PARTITION BY code ORDER BY r) prev FROM valid
+        ) SELECT COUNT(*),COUNT(*) FILTER(WHERE prev IS NOT NULL),
+          COUNT(*) FILTER(WHERE t<prev),COUNT(DISTINCT code) FILTER(WHERE t<prev) FROM w''',
+          [str(path),*batch,day]).fetchone()
+        physical=[a+b for a,b in zip(physical,row)]
+    return ({'eligibleRows':None,'groups':exact[0],'affectedRows':exact[1],
+             'excessRows':exact[2],'affectedStocks':exact[3]},
+            dict(zip(['eligibleRows','comparablePairs','regressions','affectedStocks'],physical)))
+
 def quality_report(con,root,day,progress=print):
     import hashlib
     from level2_contract import __file__ as contract_file
@@ -98,6 +135,11 @@ def inspect_day(con, root, day, progress=print):
     ) SELECT COUNT(*),COUNT(*) FILTER(WHERE prev IS NOT NULL),
       COUNT(*) FILTER(WHERE t<prev),COUNT(DISTINCT code) FILTER(WHERE t<prev) FROM w''',
       [snapshot_path,day]).fetchone()
+    raw_audits={}
+    for kind in ['deal','order_raw']:
+        exact,physical=audit_raw_rows(con,root/f'{kind}_{day}.parquet',day,sets[kind],progress)
+        exact['eligibleRows']=profiles[kind]['rows']
+        raw_audits[kind]=(exact,physical)
     progress('quality '+day+' order linkage')
     # Inspect both native candidate key fields, never select one merely for best fit.
     linkage={}
@@ -130,12 +172,17 @@ def inspect_day(con, root, day, progress=print):
       'snapshotExactDuplicates':{'eligibleRows':profiles['snapshot']['rows'],
           **dict(zip(['candidateKeyGroups','candidateRows','groups','affectedRows','excessRows'],exact_snapshot))},
       'snapshotPhysicalTimeRegressions':dict(zip(['eligibleRows','comparablePairs','regressions','affectedStocks'],physical_snapshot)),
+      'dealExactDuplicates':raw_audits['deal'][0],
+      'orderRawExactDuplicates':raw_audits['order_raw'][0],
+      'dealPhysicalTimeRegressions':raw_audits['deal'][1],
+      'orderRawPhysicalTimeRegressions':raw_audits['order_raw'][1],
       'linkage':linkage,'limits':['成交候选键为股票/日期/成交编号；无频道，不将候选键重复直接判定为重复成交，不自动去重。',
           '连续竞价同股同时间快照重复单列：时间精度及物理写入顺序不能证明独立盘口事件；涉及股票的按需盘口路径拒绝任意选样。',
           '快照完全重复按全部原始字段逐项分组；物理行时间回退只描述Parquet文件排列，不能证明交易所原始事件顺序。',
           '两种委托键仅做匹配审计，匹配不证明经济订单身份；重复键可能含撤单等多事件，不自动认定错误。',
           '零时钟、盘后记录单列：可能是状态或延迟发布，不直接称为非法交易。',
-          '逐笔成交与原始委托的全字段重复、三表源事件顺序、订单事件语义与盘口重建仍未完成；不是完整性认证。']}
+          '三表完全重复均只指原始字段逐项相同，不自动去重；三表物理行时钟回退只描述Parquet文件排列，不能证明交易所源事件顺序。',
+          '三表源事件顺序、订单事件语义与盘口重建仍未完成；不是完整性认证。']}
 
 def render_quality(q):
     from html import escape
@@ -154,8 +201,13 @@ def render_quality(q):
     snapshot_dups=q.get('snapshotTimestampDuplicates')
     html+=('<p>连续竞价同股同时间快照：'+(f"{snapshot_dups['groups']:,} 组，涉及 {snapshot_dups['affectedStocks']:,} 只、{snapshot_dups['affectedRows']:,} 行；分母 {snapshot_dups['eligibleRows']:,} 行。" if snapshot_dups else '未核验。')+'重复不自动去重；盘口路径遇重复时间不任意选样。</p>')
     exact=q.get('snapshotExactDuplicates');physical=q.get('snapshotPhysicalTimeRegressions')
-    html+=('<p>快照全字段完全重复：'+(f"{exact['groups']:,} 组、{exact['affectedRows']:,} 行；先在 {exact['eligibleRows']:,} 行中识别 {exact['candidateKeyGroups']:,} 组同股同日期同时间候选，再逐字段精确比较。" if exact else '未核验。')+'成交与原始委托未覆盖。</p>')
+    html+=('<p>快照全字段完全重复：'+(f"{exact['groups']:,} 组、{exact['affectedRows']:,} 行；先在 {exact['eligibleRows']:,} 行中识别 {exact['candidateKeyGroups']:,} 组同股同日期同时间候选，再逐字段精确比较。" if exact else '未核验。')+'</p>')
     html+=('<p>快照 Parquet 物理行时钟回退：'+(f"{physical['regressions']:,}/{physical['comparablePairs']:,} 对，涉及 {physical['affectedStocks']:,} 只。" if physical else '未核验。')+'这不证明交易所源事件顺序。</p>')
+    for label,key in [('逐笔成交','deal'),('原始委托','orderRaw')]:
+        raw_exact=q.get(key+'ExactDuplicates');raw_order=q.get(key+'PhysicalTimeRegressions')
+        html+='<p>'+label+'全字段完全重复：'+(f"{raw_exact['groups']:,} 组、{raw_exact['affectedRows']:,}/{raw_exact['eligibleRows']:,} 行（{raw_exact['affectedRows']/raw_exact['eligibleRows']*100:.6f}%），涉及 {raw_exact['affectedStocks']:,} 只；" if raw_exact and raw_exact['eligibleRows'] else '未核验；')
+        html+='Parquet 物理行时钟回退：'+(f"{raw_order['regressions']:,}/{raw_order['comparablePairs']:,} 对，涉及 {raw_order['affectedStocks']:,} 只。" if raw_order else '未核验。')+'</p>'
+    html+='<p>三表完全重复均按全部原始字段判断，不自动删行；物理文件顺序不证明交易所事件顺序。</p>'
     html+='<h3>候选委托字段匹配，不代表已确认订单身份</h3><div class="scroll"><table><thead><tr><th>候选字段</th><th>有效编号成交</th><th>匹配成交</th><th>重复键涉及成交</th><th>多方向键涉及成交</th></tr></thead><tbody>'
     for k,v in q['linkage'].items():
         html+='<tr>'+''.join('<td>'+f(x)+'</td>' for x in [k,v['eligibleTrades'],v['matchedTrades'],v['repeatedKeyTrades'],v['multiSideKeyTrades']])+'</tr>'
