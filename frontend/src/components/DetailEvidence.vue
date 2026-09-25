@@ -20,6 +20,13 @@ const bookPct = value => Number.isFinite(value) ? `${value > 0 ? '+' : ''}${valu
 const tenPct = row => row.tenLevelValid == null ? '未保存' : bookPct(row.medianTenLevelImbalancePct)
 const displayedRise = row => !row || row.sameBidComparable == null ? '未保存' : row.sameBidComparable ? `${row.sameBidDisplayedRise} / ${row.sameBidComparable}` : '无可比同价快照'
 const quoteStatus = { INVALID_DATE: '快照日期异常，未计算', DUPLICATE_TIME: '连续竞价时间戳重复，未任意选样', NO_COMPARABLE_QUOTES: '无可比较的有效一档快照' }
+const tradeStatus = { MISSING_SEQUENCE: '缺少成交编号', INVALID_SEQUENCE: '成交编号缺失或重复', INVALID_TIME_ORDER: '编号与时间顺序冲突', INVALID_PRINT: '成交价或数量异常', NO_REGULAR_PRINTS: '连续竞价无有效成交' }
+const tradeDrawdown = computed(() => {
+  const item = evidence.value?.tradePrintDrawdown
+  if (!item) return '此结果未保存；不读取最新逐笔数据回填'
+  if (item.status !== 'OBSERVED') return tradeStatus[item.status] || '逐笔路径不可比较'
+  return `${ratio(item.valuePct)}（${item.peakTime} → ${item.troughTime}） · ${item.printCount.toLocaleString()} 笔`
+})
 
 function accept(response, id) {
   if (id !== sequence) return
@@ -58,6 +65,7 @@ onBeforeUnmount(() => { sequence++; clearTimeout(timer) })
     <p class="footnote" role="status">{{ state.message }}。{{ frozen ? '只读快照，不读取最新数据。' : '仅计算本股、当前报告日；结果缓存于本机。' }}</p>
     <template v-if="evidence">
       <p class="footnote">成交 {{ evidence.tradeRows?.toLocaleString() ?? '未知' }} 条 · 有效时段成交额覆盖 {{ ratio(evidence.regularCoverage) }} · 主动净额 {{ money(evidence.net) }} · 未知方向金额 {{ money(evidence.unknownAmount) }}</p>
+      <p class="footnote">连续竞价逐笔成交价已观测回撤：{{ tradeDrawdown }}。仅用与报告成交额相同的正价正量有效成交；成交编号唯一且时间非降时按编号排序。不含集合竞价或无成交价位，也不代表可成交退出或含滑点收益。</p>
       <h4>盘中五时段</h4>
       <div class="table-scroll"><table><thead><tr><th>时段</th><th>成交额</th><th>主动净额</th><th>VWAP</th><th>一档中间价 首→末</th><th>中间价变化</th><th>低点至末值恢复</th></tr></thead><tbody><tr v-for="row in evidence.segments || []" :key="row.s"><td>{{ row.s }}</td><td>{{ money(row.a) }}</td><td>{{ money(row.n) }}</td><td>{{ row.v ?? '未知' }}</td><td>{{ quotePrice(quoteBySegment[row.s]?.firstMid) }} → {{ quotePrice(quoteBySegment[row.s]?.lastMid) }}<small v-if="quoteBySegment[row.s]" class="quote-coverage">{{ quoteBySegment[row.s].valid }}/{{ quoteBySegment[row.s].observed }} 条有效快照</small></td><td>{{ quotePct(quoteBySegment[row.s]?.midChangePct) }}</td><td>{{ quotePct(quoteBySegment[row.s]?.recoveryPct) }}</td></tr></tbody></table></div>
       <p class="footnote">盘口中间价：{{ evidence.quotePath ? evidence.quotePath.status === 'AVAILABLE' ? evidence.quotePath.method : quoteStatus[evidence.quotePath.status] || '盘口路径不可比较' : '此结果未保存盘口路径，不读取最新数据回填' }}；与主动净额并列仅供观察，不把价稳自动解释为被动承接或补单。</p>

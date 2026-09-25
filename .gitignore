@@ -10,6 +10,7 @@
 !/level2_intraday.py
 !/level2_minute_state.py
 !/level2_quote_path.py
+!/level2_trade_path.py
 !/test_level2_quote_path.py
 !/level2_kline.py
 !/level2_paths.py

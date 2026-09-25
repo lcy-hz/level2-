@@ -9,6 +9,7 @@ from urllib.error import HTTPError
 import duckdb
 import pandas as pd
 from level2_detail_server import Service, calculate, source_identity, make_handler
+from level2_trade_path import observe_prints
 
 
 class DetailTests(unittest.TestCase):
@@ -61,6 +62,28 @@ class DetailTests(unittest.TestCase):
         self.assertAlmostEqual(result['quotePath']['segments'][0]['midChangePct'],1)
         self.assertEqual(result['quotePath']['segments'][0]['depthValid'],2)
         self.assertEqual(result['quotePath']['segments'][0]['tenLevelValid'],2)
+        self.assertEqual(result['tradePrintDrawdown']['status'], 'MISSING_SEQUENCE')
+
+    def test_trade_print_path_requires_order_and_valid_prices(self):
+        rows = [(1, 93000000, 120000, 100), (2, 93000000, 100000, 100),
+                (3, 100001000, 90000, 100)]
+        result = observe_prints(rows)
+        self.assertEqual(result['status'], 'OBSERVED')
+        self.assertAlmostEqual(result['valuePct'], -25)
+        self.assertEqual((result['peakTime'], result['troughTime']),
+                         ('09:30:00.000', '10:00:01.000'))
+        self.assertEqual(observe_prints(rows[:2] + [(2, 100001000, 90000, 100)])['status'], 'INVALID_SEQUENCE')
+        self.assertEqual(observe_prints(rows[:2] + [(3, 92900000, 90000, 100)])['status'], 'INVALID_TIME_ORDER')
+        self.assertEqual(observe_prints(rows[:2] + [(3, 100001000, 0, 100)])['status'], 'INVALID_PRINT')
+
+    def test_trade_print_path_is_included_in_deep_detail(self):
+        con=duckdb.connect();path=self.root/f'deal_{self.day}.parquet'
+        con.execute('CREATE TABLE t AS SELECT row_number() OVER (ORDER BY TRY_CAST("时间" AS BIGINT)) AS "成交编号", * FROM read_parquet(?) WHERE "成交价格"<>\'0\'', [str(path)])
+        con.execute('COPY t TO ? (FORMAT PARQUET)',[str(path)]);con.close()
+        result=calculate('600000.SH',self.day,self.expected,lambda _:None,self.root)
+        self.assertEqual(result['tradePrintDrawdown']['status'], 'OBSERVED')
+        self.assertEqual(result['tradePrintDrawdown']['printCount'], 2)
+        self.assertEqual(result['tradePrintDrawdown']['valuePct'], 0)
 
     def test_unknown_direction_is_not_zero(self):
         con=duckdb.connect();path=self.root/f'deal_{self.day}.parquet'

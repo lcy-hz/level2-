@@ -14,6 +14,7 @@ import re
 import duckdb
 from level2_contract import native_ticks,KNOWN_NET,UNKNOWN_AMOUNT,COMPLETE_NET,parent_query
 from level2_quote_path import quote_path
+from level2_trade_path import trade_print_drawdown
 
 BASE = Path(__file__).resolve().parent
 LEGACY_BOOKMARK = 'level2-market-scan_20260922.html'
@@ -46,6 +47,7 @@ def source_identity(day, root=SOURCE):
     identity.append(('calculator', hashlib.sha256(Path(__file__).read_bytes()).hexdigest()))
     identity.append(('contract',hashlib.sha256((BASE/'level2_contract.py').read_bytes()).hexdigest()))
     identity.append(('quote_path',hashlib.sha256((BASE/'level2_quote_path.py').read_bytes()).hexdigest()))
+    identity.append(('trade_path',hashlib.sha256((BASE/'level2_trade_path.py').read_bytes()).hexdigest()))
     return hashlib.sha256(json.dumps(identity).encode()).hexdigest()
 
 
@@ -80,6 +82,8 @@ def calculate(code, day, expected, progress, root=SOURCE):
         parents = sorted([{'b': b, 'n': round(n), 'c': c} for _, b, n, c in rows], key=lambda r: order[r['b']])
         if abs(sum(p['n'] for p in parents) - known_net) > len(parents) + 2:
             raise ValueError('关联委托净额对账失败')
+        progress('正在核对成交编号与逐笔成交价路径…')
+        trade_path = trade_print_drawdown(con, root / f'deal_{day}.parquet', code, day)
         progress('正在读取 order_raw 原始委托类型与方向…')
         rows = con.execute('''SELECT COALESCE(NULLIF(TRIM("委托类型"),''),'空'),
             COALESCE(NULLIF(TRIM("委托代码"),''),'空'),COUNT(*),SUM(TRY_CAST("委托数量" AS DOUBLE)),
@@ -106,7 +110,7 @@ def calculate(code, day, expected, progress, root=SOURCE):
         return {'code': code, 'day': day, 'sourceIdentity': before,
                 'computedAt': datetime.now(timezone.utc).isoformat(),
                 'segments': segments, 'parents': parents, 'orders': orders,
-                'quotePath': quotes,
+                'quotePath': quotes, 'tradePrintDrawdown': trade_path,
                 'regularCoverage': round(sum(r[1] for r in con.execute('''SELECT 1,SUM(price*qty) FROM ticks
                    WHERE (t BETWEEN 93000000 AND 113000000) OR (t BETWEEN 130000000 AND 150000000)''').fetchall() if r[1] is not None) / amount * 100, 2),
                 'tradeRows': count, 'amount': round(amount), 'net': round(net) if net is not None else None,
