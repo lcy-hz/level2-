@@ -1,5 +1,5 @@
 <script setup>
-defineProps({ markets: { type: Array, required: true } })
+defineProps({ markets: { type: Array, required: true }, qualityAvailable: { type: Boolean, default: false } })
 const money = value => value == null ? '未知' : `${(value / 1e8).toFixed(2)} 亿`
 const tone = value => value == null ? '' : value > 0 ? 'positive' : value < 0 ? 'negative' : ''
 </script>
@@ -19,6 +19,7 @@ const tone = value => value == null ? '' : value > 0 ? 'positive' : value < 0 ? 
         </tbody>
       </table>
     </div>
-    <p class="footnote">各日覆盖与方向质量须结合数据门槛阅读；未知净额不显示为零。</p>
+    <p v-if="qualityAvailable" class="footnote">各日覆盖与方向质量须结合数据门槛阅读；未知净额不显示为零。</p>
+    <p v-else class="footnote">此报告未保存目标日原始三表质量报告；市场逐日值只按已冻结结果展示，不能据此完成方向质量核验。未知净额不显示为零。</p>
   </section>
 </template>
