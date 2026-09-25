@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from level2_limitup_study import board_of, limitup_study, market_change, read_limitups
+from level2_limitup_study import adjusted_open_reference, board_of, limitup_study, market_change, read_limitups
 
 
 DAYS = ['20260914', '20260915', '20260916', '20260917']
@@ -14,6 +14,41 @@ def flow(ratio):
 
 
 class LimitUpStudyTests(unittest.TestCase):
+    def test_adjusted_open_reference_needs_observed_valid_positive_volume(self):
+        self.assertEqual(adjusted_open_reference((11, 12, 10, 11.5, 100), 23), 22)
+        self.assertEqual(adjusted_open_reference((10, 10, 10, 10, 1), 20), 20)
+        self.assertIsNone(adjusted_open_reference((10, 10, 10, 10, 0), 20))
+        self.assertIsNone(adjusted_open_reference((10, 9, 10, 10, 100), 20))
+        self.assertIsNone(adjusted_open_reference((10, 10, 10, 10, 100), None))
+
+    def test_post_open_reference_is_paired_and_not_reported_for_one_day(self):
+        days = DAYS + ['20260918', '20260921']
+        flows = {'20260914': {A: flow(0), B: flow(0), X: flow(-20)},
+                 '20260915': {A: flow(0), B: flow(0), X: flow(-20)},
+                 '20260916': {A: flow(5), B: flow(-5), X: flow(-10)}}
+        limitups = {'20260915': ({'status': 'AVAILABLE', 'uRows': 0}, {}),
+                    '20260916': ({'status': 'AVAILABLE', 'uRows': 2}, {A: 10, B: 10})}
+        prices = {'20260916': {A: 20, B: 20},
+                  '20260917': {A: 22, B: 20},
+                  '20260918': {A: 24, B: 19},
+                  '20260921': {A: 26, B: 18}}
+        bars = {'20260916': {A: (10, 10, 10, 10, 100), B: (10, 10, 10, 10, 100)},
+                '20260917': {A: (10, 11, 10, 11, 100), B: (10, 10, 10, 10, 0)}}
+        result = limitup_study(flows, {day: 'NATIVE' for day in DAYS[:3]},
+                               limitups, prices, bars, days, '20260915', '20260916',
+                               '20260921', '20260915', (1, 3))
+        rows = {(row['horizon'], row['stockDirection']): row for row in result['summary']
+                if row['cohort'] == 'OUT_OF_SAMPLE' and row['marketDirection'] == 'IMPROVING'}
+        self.assertEqual(rows[1, 'IMPROVING']['entryOpenObserved'], 1)
+        self.assertEqual(rows[1, 'IMPROVING']['postOpenObserved'], 0)
+        self.assertIsNone(rows[1, 'IMPROVING']['meanNextOpenToTargetPct'])
+        self.assertAlmostEqual(rows[3, 'IMPROVING']['meanSignalToNextOpenPct'], 0)
+        self.assertAlmostEqual(rows[3, 'IMPROVING']['meanSignalToTargetPairedPct'], 30)
+        self.assertAlmostEqual(rows[3, 'IMPROVING']['meanNextOpenToTargetPct'], 30)
+        self.assertEqual(rows[3, 'WEAKENING']['entryOpenObserved'], 0)
+        self.assertEqual(rows[3, 'WEAKENING']['postOpenObserved'], 0)
+        self.assertIsNone(rows[3, 'WEAKENING']['meanNextOpenToTargetPct'])
+
     def test_code_segment_is_explicit(self):
         self.assertEqual([board_of(code) for code in (A, B, X, Y)],
                          ['MAIN', 'GEM', 'MAIN', 'STAR'])

@@ -115,6 +115,15 @@ def market_change(previous, current, limit_codes):
             'previousRatio': prior_ratio, 'currentRatio': current_ratio, 'deltaPP': delta}
 
 
+def adjusted_open_reference(bar, adjusted_close):
+    """Observed next-session open on the adjusted-close scale, never a fill price."""
+    if entry_gate(bar) not in {'ONE_PRICE_SESSION', 'PRICE_REFERENCE_ONLY'} or not _price(adjusted_close):
+        return None
+    raw_open, _, _, raw_close, _ = bar
+    value = raw_open * adjusted_close / raw_close
+    return value if _price(value) else None
+
+
 def limitup_study(flows, sources, limitups, prices, bars, days, start, end, asof, split,
                   horizons=(1, 3, 5)):
     """Fixed-sign 2x2 comparison among provider-U, non-ST沪深A stocks only."""
@@ -128,6 +137,8 @@ def limitup_study(flows, sources, limitups, prices, bars, days, start, end, asof
         raise ValueError('涨停研究起点前缺前一交易日')
     groups = defaultdict(lambda: {'events': 0, 'observed': 0, 'pending': 0,
                                   'missingPrice': 0, 'returns': [], 'excesses': [], 'boardExcesses': [],
+                                  'entryOpenGaps': [], 'postOpenReturns': [],
+                                  'pairedSignalReturns': [],
                                   'eventAmounts': [], 'entryGateCounts': defaultdict(int),
                                   'daily': defaultdict(lambda: {'events': 0, 'observed': 0,
                                                                 'returns': [], 'excesses': [], 'boardExcesses': []})})
@@ -234,11 +245,24 @@ def limitup_study(flows, sources, limitups, prices, bars, days, start, end, asof
                     group['pending'] += 1
                     continue
                 entry_day = days[position + 1]
-                group['entryGateCounts'][entry_gate(bars.get(entry_day, {}).get(code))] += 1
+                entry_bar = bars.get(entry_day, {}).get(code)
+                group['entryGateCounts'][entry_gate(entry_bar)] += 1
+                entry_open = adjusted_open_reference(entry_bar, prices.get(entry_day, {}).get(code))
+                if entry_open is not None:
+                    gap = _return(prices[day][code], entry_open)
+                    if gap is not None:
+                        group['entryOpenGaps'].append(gap)
                 outcome = _return(prices[day][code], target_prices.get(code))
                 if outcome is None:
                     group['missingPrice'] += 1
                     continue
+                # T+1 opening-to-close is a price path, not a same-day A-share exit.
+                # Only horizons >= 2 receive a post-open endpoint comparison.
+                if horizon >= 2 and entry_open is not None:
+                    post_open = _return(entry_open, target_prices.get(code))
+                    if post_open is not None:
+                        group['postOpenReturns'].append(post_open)
+                        group['pairedSignalReturns'].append(outcome)
                 group['observed'] += 1
                 daily['observed'] += 1
                 group['returns'].append(outcome)
@@ -276,6 +300,14 @@ def limitup_study(flows, sources, limitups, prices, bars, days, start, end, asof
                                     'medianEventAmountYuan': (statistics.median(group['eventAmounts'])
                                                               if group['eventAmounts'] else None),
                                     'entryGateCounts': dict(sorted(group['entryGateCounts'].items())),
+                                    'entryOpenObserved': len(group['entryOpenGaps']),
+                                    'meanSignalToNextOpenPct': (statistics.mean(group['entryOpenGaps'])
+                                                                if group['entryOpenGaps'] else None),
+                                    'postOpenObserved': len(group['postOpenReturns']),
+                                    'meanSignalToTargetPairedPct': (statistics.mean(group['pairedSignalReturns'])
+                                                                    if group['pairedSignalReturns'] else None),
+                                    'meanNextOpenToTargetPct': (statistics.mean(group['postOpenReturns'])
+                                                                if group['postOpenReturns'] else None),
                                     'triggerDays': len(daily_rows), 'comparableDays': len(comparable),
                                     'meanReturnPct': statistics.mean(group['returns']) if group['returns'] else None,
                                     'meanExcessPct': statistics.mean(group['excesses']) if group['excesses'] else None,
@@ -382,4 +414,5 @@ def limitup_study(flows, sources, limitups, prices, bars, days, start, end, asof
                             '同日U股均值只作同群价格基准；缺价格不补零，剔一范围不是显著性检验',
                             '板块内对照只控制代码板块与事件日期，未控制行业、市值、容量、封单或可成交性',
                             '中位数与每组至少3只只作预先固定的极值敏感性诊断；触发日成交额和次日日线门槛不等于可成交容量或订单成交',
+                            '次日开盘仅为有量且OHLC有效日线的复权价格参考；后1日不展示开盘到当日收盘为交易收益，后3/5日也不代表真实成交、费用后收益',
                             '本地涨停列表与复权因子无历史采集时间冻结，严格 PIT 未验证']}
