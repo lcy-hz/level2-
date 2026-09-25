@@ -263,6 +263,8 @@ class StateService:
     def start(self,day,window):
         self.validate(day,window);self.workspace.get_service(day)
         key=(day,window);identity=self.identity(day,window)
+        previous=self.status(day,window)
+        if previous['status']=='done':return previous
         with self.lock:
             old=self.jobs.get(key)
             if old and old.get('identity')==identity and old['status'] in ('queued','running','done'):return dict(old)
@@ -273,7 +275,20 @@ class StateService:
 
     def status(self,day,window):
         self.validate(day,window)
-        with self.lock:r=dict(self.jobs.get((day,window),{'status':'missing','message':'尚未计算'}))
+        key=(day,window)
+        with self.lock:r=dict(self.jobs.get(key,{'status':'missing','message':'尚未计算'}))
+        if r['status']=='missing':
+            index=self.receipts/f'latest_{day}_{window}.json'
+            try:
+                saved=json.loads(index.read_text())
+                token=saved['receipt']
+                if not isinstance(token,str) or not re.fullmatch('[0-9a-f]{32}',token):raise ValueError('无效凭据')
+                result=json.loads((self.receipts/f'{token}.json').read_text())
+                if (result['day'],result['window'],result['identity'])!=(day,window,saved['identity']):raise ValueError('保存结果身份不一致')
+                r={'status':'done','message':'已读取保存的连续状态','identity':saved['identity'],'receipt':token,'result':result}
+                with self.lock:self.jobs.setdefault(key,r)
+            except (OSError,ValueError,KeyError,TypeError):
+                pass
         if r['status']=='done' and r['identity']!=self.identity(day,window):return {'status':'stale','message':'来源已变化，请重新计算'}
         return r
 
@@ -302,7 +317,10 @@ class StateService:
                     'priceMethod':'本地 close×adj_factor 比值；N日收益使用窗口前一交易日为基点；历史当时可得性未验证',
                     'scope':'日级价格／成交额／已识别主动方向。已校准旧来源0买1卖，逐条买卖编号复核；未校准来源及冲突记录未知。无自动吸筹、支撑或买卖触发。'}
             token=uuid.uuid4().hex;self.receipts.mkdir(exist_ok=True)
-            (self.receipts/f'{token}.json').write_text(dump(result))
+            receipt=self.receipts/f'{token}.json';receipt_tmp=receipt.with_suffix('.tmp')
+            receipt_tmp.write_text(dump(result));receipt_tmp.replace(receipt)
+            latest=self.receipts/f'latest_{day}_{window}.json';latest_tmp=latest.with_suffix('.tmp')
+            latest_tmp.write_text(dump({'receipt':token,'identity':identity}));latest_tmp.replace(latest)
             with self.lock:self.jobs[key]={'status':'done','message':'连续状态计算完成','identity':identity,'receipt':token,'result':result}
         except Exception as e:
             with self.lock:self.jobs[key]={'status':'error','message':str(e),'identity':identity}

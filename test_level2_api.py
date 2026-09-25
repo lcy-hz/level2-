@@ -1,16 +1,26 @@
 """HTTP contract tests for the read-only report payloads."""
 import json
+import re
+import tempfile
 import unittest
+from pathlib import Path
 from http.server import ThreadingHTTPServer
 from threading import Thread
 from types import SimpleNamespace
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from level2_detail_server import make_handler
+from level2_detail_server import make_handler, read_report
 
 
 class ReportApiTests(unittest.TestCase):
+    def test_formal_report_rejects_legacy_html_payload(self):
+        with tempfile.TemporaryDirectory() as directory:
+            report=Path(directory)/'report.html'
+            report.write_text('<script>const D={"markets":[],"cards":[]};</script>')
+            with self.assertRaisesRegex(ValueError,'必须是 JSON'):
+                read_report(report)
+
     def setUp(self):
         report={'markets':[{'day':'20260922','stocks':1}],
                 'cards':[{'code':'000001.SZ','net':None,'unknownAmount':100}]}
@@ -59,6 +69,20 @@ class ReportApiTests(unittest.TestCase):
         with self.assertRaises(HTTPError) as context:
             self.fetch('/api/report/data?date=20260921')
         self.assertEqual(context.exception.code,400)
+
+    def test_one_vue_entry_and_legacy_bookmark_redirect(self):
+        with urlopen(f'http://127.0.0.1:{self.port}/') as response:
+            html=response.read().decode()
+            self.assertIn('<div id="app"></div>',html)
+            self.assertNotIn('const D=',html)
+            asset=re.search(r'src="(/assets/[^\"]+\.js)"',html)
+            self.assertIsNotNone(asset)
+        with urlopen(f'http://127.0.0.1:{self.port}{asset.group(1)}') as response:
+            self.assertIn('javascript',response.headers['Content-Type'])
+            self.assertGreater(len(response.read()),100)
+        with urlopen(f'http://127.0.0.1:{self.port}/level2-market-scan_20260922.html?date=20260922') as response:
+            self.assertEqual(response.url,f'http://127.0.0.1:{self.port}/?date=20260922')
+            self.assertIn('<div id="app"></div>',response.read().decode())
 
     def test_snapshot_is_separate_and_bad_id_is_rejected(self):
         result=self.fetch('/api/snapshot/data?id='+'a'*32)

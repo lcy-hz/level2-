@@ -29,10 +29,3 @@ const priceView=derive({window:2,states:{A:state([{...row('1',100,-1),priceDaily
 assert.equal(priceView.priceCommon,2);assert.deepEqual(priceView.trajectory.map(r=>r.priceCoverage),[3,2]);assert.deepEqual(priceView.trajectory.map(r=>r.priceUpShare),[50,50]);assert.equal(priceView.priceState.upShareSlopePPPerDay,0);
 assert.equal(derive({window:2,states:{A:state([row('1',100,1),row('2',100,1)])}}).counts.flat,1);
 console.log('state view: weighted/cohort/missing/unknown/one-day/transitions/tiny/empty/flat PASS');
-// Exercise production async accept/failure functions with controlled responses.
-const fs=require('node:fs'),vm=require('node:vm');
-const html=fs.readFileSync('level2_state_ui.html','utf8');
-const funcs=html.slice(html.indexOf('function failure('),html.indexOf("$('state-apply').onclick"));
-const sandbox={requestId:2,status:{textContent:''},active:{window:3},results:new Map(),window:{L2_CAPTURE:{states:{}}},busy:()=>{},apply:r=>{sandbox.applied=r;},Error};
-vm.createContext(sandbox);vm.runInContext(funcs,sandbox);
-(async()=>{await sandbox.accept({status:'done',result:{window:3}},3,1);assert.equal(sandbox.applied,undefined);await sandbox.accept({status:'done',result:{window:5},receipt:'proof'},5,2);assert.equal(sandbox.applied.window,5);sandbox.failure(Error('test failure'),2);assert.match(sandbox.status.textContent,/仍展示 3交易日旧结果/);console.log('stale response / failure retention PASS');})();

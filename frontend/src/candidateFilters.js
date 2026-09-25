@@ -10,10 +10,12 @@ const stateMetric = {
 const cardMetrics = new Set(['net', 'ret', 'amount'])
 
 export function filterCandidates(cards, { query = '', label = 'all', direction = 'all', order = 'default',
-  orderDirection = 'desc', stateChange = 'all', stateContinuity = 'all', stateView = null } = {}) {
+  orderDirection = 'desc', stateChange = 'all', stateContinuity = 'all', stateView = null,
+  focusOnly = false } = {}) {
   const search = query.trim().toLowerCase()
   const states = new Map((stateView?.stocks || []).map(stock => [stock.code, stock]))
   const result = cards.filter(card =>
+    (!focusOnly || card.detail) &&
     (label === 'all' || card.label === label) &&
     (direction === 'all' || (direction === 'up' ? card.returnSign > 0 : direction === 'down' ? card.returnSign < 0 : card.returnSign === 0)) &&
     (!search || card.code.toLowerCase().includes(search) || card.name.toLowerCase().includes(search)) &&

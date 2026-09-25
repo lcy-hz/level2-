@@ -1,7 +1,6 @@
 """Regression tests for report-date qfq normalization and embedded chart data."""
 import json
 import math
-import re
 import unittest
 from pathlib import Path
 import pandas as pd
@@ -32,14 +31,9 @@ class KlineTests(unittest.TestCase):
             normalized_candles(frame, {'X'}, ['20260922'], '20260922')
 
     def test_report_lazy_chart_contract_and_current_local_data(self):
-        html = Path(__file__).with_name('level2-market-scan_20260922.html').read_text()
-        match = re.search(r'<script id="kline-data" type="application/json">(.*?)</script>', html, re.S)
-        self.assertIsNotNone(match)
-        data = json.loads(match[1])
-        self.assertEqual(data['target'],'20260922')
-        self.assertEqual(data['series'],{})
-        self.assertEqual(data['dates'],[])
-        self.assertIn('悬浮',data['method'])
+        data=json.loads((Path(__file__).parent/'.level2_reports'/'20260922'/'report.json').read_text())
+        self.assertEqual(data['markets'][-1]['day'],'20260922')
+        self.assertIn('601669.SH',{card['code'] for card in data['cards']})
         # The live endpoint builds from current files; do not freeze an obsolete missing-file list.
         data=build_bundle({'601669.SH'},'20260922')
         self.assertEqual(len(data['dates']), 60)

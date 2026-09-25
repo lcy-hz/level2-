@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { filterContinuousStocks } from '../src/continuousFilters.js'
+import { filterContinuousStocks, parseAdvancedFilters } from '../src/continuousFilters.js'
 
 const stocks = [
   { code: '000003.SZ', change: 'unknown', level: null, viewDelta: null, weighted: null, slope: null, streak: null, improve: null, valid: 1, expected: 3 },
@@ -26,6 +26,34 @@ test('search, change, coverage and continuity filters intersect without filling 
   assert.deepEqual(codes(filterContinuousStocks(stocks, {}, { continuity: 'unknown' })), ['000003.SZ'])
   assert.deepEqual(codes(filterContinuousStocks(stocks, {}, { coverage: 'partial' })), ['000003.SZ', '000004.SZ'])
   assert.deepEqual(codes(filterContinuousStocks(stocks, {}, { change: 'flat' })), [])
+  assert.deepEqual(codes(filterContinuousStocks(stocks, {}, { coverage: 'unknown' })), ['000003.SZ'])
+})
+
+test('legacy advanced presets, numeric ranges and strict turn filters retain unknown values', () => {
+  const rows = [
+    { code: 'A', level: -2, viewDelta: 0.2, weighted: -1, priceReturn: 1, amount: 2e8,
+      amountChange: -4, sign: -1, streak: 2, improve: 1, history: [
+        { ratio: -3, amount: 10, net: -3 }, { ratio: -2, amount: 10, net: -2 }] },
+    { code: 'B', level: 2, viewDelta: 3, weighted: 1, priceReturn: -1, amount: 3e8,
+      amountChange: 5, sign: 1, streak: 1, improve: 2, history: [
+        { ratio: -1, amount: 10, net: -1 }, { ratio: 2, amount: 10, net: 2 }] },
+    { code: 'C', level: null, viewDelta: null, weighted: null, priceReturn: null, amount: null },
+  ]
+  assert.deepEqual(codes(filterContinuousStocks(rows, {}, { advanced: { preset: 'relief', amountMin: 1 } })), ['A'])
+  assert.deepEqual(codes(filterContinuousStocks(rows, {}, { advanced: { preset: 'downBuy', turn: 'toBuy' } })), ['B'])
+  assert.deepEqual(codes(filterContinuousStocks(rows, {}, { advanced: { levelMin: -2, levelMax: 2, price: 'positive' } })), ['A'])
+  assert.deepEqual(codes(filterContinuousStocks(rows, {}, { advanced: { amountMax: 1 } })), [])
+  assert.deepEqual(codes(filterContinuousStocks(rows, {}, { advanced: { buyDays: 1 } })), ['B'])
+  assert.deepEqual(codes(filterContinuousStocks(rows, {}, { advanced: { volume: 'negative' } })), ['A'])
+})
+
+test('advanced numeric parser rejects invalid bounds instead of treating blanks or unknown as zero', () => {
+  assert.deepEqual(parseAdvancedFilters({ amountMin: '', preset: 'all' }), { filters: {}, error: '' })
+  assert.equal(parseAdvancedFilters({ amountMin: '2', amountMax: '1' }).error.length > 0, true)
+  assert.equal(parseAdvancedFilters({ improveTimes: '0' }).error.length > 0, true)
+  assert.equal(parseAdvancedFilters({ levelMin: 'Infinity' }).error.length > 0, true)
+  assert.deepEqual(parseAdvancedFilters({ levelMin: '-0.1', amountMax: '3' }).filters,
+    { levelMin: -0.1, amountMax: 3 })
 })
 
 test('one-day improvement count cannot be ranked as measured persistence', () => {

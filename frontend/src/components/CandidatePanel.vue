@@ -25,10 +25,13 @@ const effectiveOrder = computed(() => (
   (!linkedView.value && order.value.startsWith('state')) ||
   (!linkedView.value?.applicable && ['stateSlope', 'stateImprove'].includes(order.value))
 ) ? 'default' : order.value)
+const focusOnly = computed(() => !query.value.trim() && label.value === 'all' && direction.value === 'all' &&
+  stateChange.value === 'all' && stateContinuity.value === 'all')
 const matches = computed(() => filterCandidates(props.cards, { query: query.value, label: label.value,
   direction: direction.value, order: effectiveOrder.value, orderDirection: orderDirection.value,
   stateChange: linkedView.value?.applicable ? stateChange.value : 'all',
-  stateContinuity: linkedView.value ? stateContinuity.value : 'all', stateView: linkedView.value }))
+  stateContinuity: linkedView.value ? stateContinuity.value : 'all', stateView: linkedView.value,
+  focusOnly: focusOnly.value }))
 const visible = computed(() => matches.value.slice((page.value - 1) * 24, page.value * 24))
 const pages = computed(() => Math.max(1, Math.ceil(matches.value.length / 24)))
 const resetPage = () => { page.value = 1 }
@@ -58,12 +61,12 @@ watch(pages, count => { if (page.value > count) page.value = count })
       <label>名称或代码<input v-model="query" @input="resetPage" placeholder="搜索 000977 / 浪潮" /></label>
       <label>候选类型<select v-model="label" @change="resetPage"><option value="all">全部</option><option v-for="item in labels" :key="item">{{ item }}</option></select></label>
       <label>价格方向<select v-model="direction" @change="resetPage"><option value="all">全部</option><option value="up">上涨</option><option value="down">下跌</option><option value="flat">平盘</option></select></label>
-      <label>排序指标<select v-model="order" @change="resetPage"><option value="default">原报告顺序</option><option value="net">主动净额</option><option value="ret">涨跌幅</option><option value="amount">成交额</option><option value="stateLevel" :disabled="!linkedView">当前净额比 %</option><option value="stateDelta" :disabled="!linkedView">较前日变化 pp</option><option value="stateWeighted" :disabled="!linkedView">窗口加权净额比 %</option><option value="stateSlope" :disabled="!linkedView?.applicable">窗口斜率 pp/日</option><option value="stateStreak" :disabled="!linkedView">可观察同向日数</option><option value="stateImprove" :disabled="!linkedView?.applicable">连续改善次数</option></select></label>
+      <label>排序指标<select v-model="order" @change="resetPage"><option value="default">报告记录顺序</option><option value="net">主动净额</option><option value="ret">涨跌幅</option><option value="amount">成交额</option><option value="stateLevel" :disabled="!linkedView">当前净额比 %</option><option value="stateDelta" :disabled="!linkedView">较前日变化 pp</option><option value="stateWeighted" :disabled="!linkedView">窗口加权净额比 %</option><option value="stateSlope" :disabled="!linkedView?.applicable">窗口斜率 pp/日</option><option value="stateStreak" :disabled="!linkedView">可观察同向日数</option><option value="stateImprove" :disabled="!linkedView?.applicable">连续改善次数</option></select></label>
       <label>资金变化<select v-model="stateChange" :disabled="!linkedView?.applicable"><option value="all">全部</option><option value="improve">改善</option><option value="worsen">恶化</option><option value="flat">持平</option><option value="unknown">未知</option></select></label>
       <label>连续性<select v-model="stateContinuity" :disabled="!linkedView"><option value="all">全部</option><option value="known">可判定</option><option value="unknown">未知</option></select></label>
       <label>排序方向<select v-model="orderDirection" :disabled="effectiveOrder === 'default'"><option value="desc">倒序 · 大→小</option><option value="asc">正序 · 小→大</option></select></label>
     </div>
-    <p class="footnote">筛选结果 {{ matches.length.toLocaleString() }} 只；{{ linkedView ? `连续指标采用已应用 ${linkedView.window} 交易日（${linkedView.dates[0]}—${linkedView.dates.at(-1)}）${!linkedView.applicable ? '；窗口内变化筛选与趋势排序暂停' : ''}` : frozen ? '此快照未保存当前连续窗口，连续筛选／排序暂停且不补读' : '连续指标须先应用同日报告的观察窗口；连续筛选／排序暂不生效' }}。未知排序值始终排最后，筛选与分页不改变原报告事实。</p>
+    <p class="footnote">{{ focusOnly ? `默认显示 ${matches.length.toLocaleString()} 只重点深查股；输入名称／代码或选择条件可筛选 ${cards.length.toLocaleString()} 只全库股票。` : `筛选结果 ${matches.length.toLocaleString()} / ${cards.length.toLocaleString()} 只。` }}{{ linkedView ? `连续指标采用已应用 ${linkedView.window} 交易日（${linkedView.dates[0]}—${linkedView.dates.at(-1)}）${!linkedView.applicable ? '；窗口内变化筛选与趋势排序暂停' : ''}` : frozen ? '此快照未保存当前连续窗口，连续筛选／排序暂停且不补读' : '连续指标须先应用同日报告的观察窗口；连续筛选／排序暂不生效' }}。报告记录顺序：新报告按代码固定排序，历史快照保持保存时的原顺序；未知排序值始终排最后，筛选与分页不改变原报告事实。</p>
     <div class="candidate-grid">
       <article v-for="card in visible" :key="card.code" class="candidate-card">
         <span class="badge">{{ card.label }}</span><strong>{{ card.name }} <KlineTrigger :code="card.code" :name="card.name" :day="day" :frozen="frozen" :snapshot-charts="snapshotCharts" @loaded="emit('chart-loaded', $event)" /></strong>

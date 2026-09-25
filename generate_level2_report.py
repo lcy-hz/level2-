@@ -4,15 +4,16 @@ import json, duckdb, pandas as pd, argparse
 from level2_paths import PATHS
 from level2_contract import native_ticks,KNOWN_NET,UNKNOWN_AMOUNT,COMPLETE_NET,parent_query,window
 from level2_state import settings
-ROOT=PATHS['level2']; OUT=Path(__file__).parent/'level2-market-scan_20260922.html'
+ROOT=PATHS['level2']
 NAMES=PATHS['stock_basic']
 DATES=['20260914','20260915','20260916','20260917','20260918','20260921','20260922']; TARGET=DATES[-1]
 parser=argparse.ArgumentParser()
 parser.add_argument('--date',default=TARGET)
 parser.add_argument('--dates',nargs='+')
-parser.add_argument('--output',type=Path,default=OUT)
+parser.add_argument('--output',type=Path)
 args=parser.parse_args()
-TARGET=args.date; OUT=args.output
+TARGET=args.date; OUT=args.output or Path(__file__).parent/'.level2_reports'/TARGET/'report.json'
+if OUT.suffix!='.json':raise ValueError('新报告仅生成 JSON；旧 HTML 页面已停止生成')
 DATES=window(TARGET,7,settings()['trade_calendar'])
 if args.dates and args.dates!=DATES:raise ValueError('报告窗口必须等于交易日历的最近7交易日，不能跳过缺口')
 if len(DATES)!=7:raise ValueError('交易日历不足7日')
@@ -86,54 +87,16 @@ for market in markets:
  g=daily[daily.trade_day==market['day']]
  market.update(knownNet=n(g.known_net.sum(),0),unknownAmount=n(g.unknown_amount.sum(),0),unknownStocks=int(g.net.isna().sum()))
  if market['unknownStocks']:market['net']=None
-from level2_quality import quality_report,render_quality
+from level2_quality import quality_report
 data['quality']=quality_report(con,ROOT,TARGET,lambda s:print(s,flush=True))
-P=json.dumps(data,ensure_ascii=False,separators=(',',':'))
-HTML='''<!doctype html><html lang=zh-CN><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>2026-09-22 Level-2 连续证据报告</title><style>:root{--b:#07111e;--p:#0e1b2d;--l:#27415c;--t:#e7f0fa;--m:#8fa7c1;--g:#55dda1;--r:#ff7d8a}*{box-sizing:border-box}body{margin:0;background:var(--b);color:var(--t);font:14px/1.55 -apple-system,"PingFang SC",sans-serif}.w{max-width:1400px;margin:auto;padding:25px 18px 60px}h1{margin:4px 0}h2{border-left:3px solid #53d4ff;padding-left:9px;margin-top:28px}.muted{color:var(--m)}.warn{padding:12px;background:#241e13;border:1px solid #785e29;border-radius:9px}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.p,.card{background:var(--p);border:1px solid var(--l);border-radius:10px;padding:13px}.metric b{display:block;font-size:20px}.pos{color:var(--g)}.neg{color:var(--r)}table{width:100%;border-collapse:collapse}th,td{padding:7px;border-bottom:1px solid var(--l);text-align:right;white-space:nowrap}th:first-child,td:first-child{text-align:left}.scroll{overflow:auto}.controls{display:flex;gap:8px;margin:12px 0;flex-wrap:wrap}input,select,button{background:#10253b;color:var(--t);border:1px solid var(--l);padding:8px;border-radius:7px}.card{cursor:pointer}.card:hover{border-color:#53d4ff}.tag{color:#bdeaff}dialog{width:min(1000px,94vw);max-height:90vh;overflow:auto;background:#09182a;color:var(--t);border:1px solid #3b6080;border-radius:12px}.two{display:grid;grid-template-columns:1fr 1fr;gap:10px}@media(max-width:800px){.grid,.two{grid-template-columns:1fr 1fr}}@media(max-width:550px){.grid,.two{grid-template-columns:1fr}}</style></head><body><main class=w><div class=muted>RESEARCH_ONLY · 本地原生 Level-2 · 证据日 2026-09-22</div><h1>连续市场与个股证据报告</h1><p class=warn><b>纠错：</b>旧报告把叫买/叫卖总量误作十档，并曾把字符串时间倒序的09:59:57误作收盘。本报告收盘取数值时间≤15:00最后正价；盘口取&lt;14:57连续竞价末档，逐列加总实际申买量1–10/申卖量1–10。主动净额不是持仓或资本流出；上涨且净卖出仅是分歧风险，不确认派发。</p><h2>数据门槛与口径</h2><div class=two><div class=p><b>7/7 发布门槛通过</b><p>尾部7个交易日三类文件、manifest、COMMITTED齐。发布成功不等于原始市场数据无缺；转换 warnings 保留在 manifest。本地只有9个证据日，20日不足，不替换日期。</p></div><div class=p><b>单位与方向</b><p>价格原始1/10000元，数量股，金额元。B/S为有效成交方向；C零价格记录不混入成交。对账展示逐股量额误差95分位。</p></div></div><h2>最近7交易日市场轨迹</h2><div id=metrics class=grid></div><div class="p scroll"><table><thead><tr><th>日期</th><th>股票</th><th>成交额</th><th>主动净额</th><th>上涨/下跌</th><th>量差P95</th><th>额差P95</th></tr></thead><tbody id=market></tbody></table></div><h2>候选形成与变化</h2><p>成交额≥2亿元后，以主动净额比45%+涨跌幅30%+成交额15%+连续竞价末档十档不平衡10%横截面排序。后验1/3日只用于历史验证，不回填当时信号。</p><div class=controls><input id=search placeholder="搜索代码/名称"><select id=filter><option value=全部>全部</option><option>主动推动候选</option><option>下跌中的主动承接候选</option><option>高位分歧风险</option><option>弱势流出/其他</option></select><select id=sort><option value=default>默认顺序</option><option value=net>主动净额</option><option value=ret>涨跌幅</option><option value=amount>成交额</option></select></div><div id=cards class=grid></div><h2>证据、反证与未知</h2><div class=two><div class=p><b>已实做</b><p>全市场7日日级轨迹；重点候选盘中价格/VWAP、五时段主动成交、主动成交关联单金额组、真实十档、状态迁移与独立后验。</p></div><div class=p><b>UNKNOWN</b><p>order_raw 已真实读取并展示类型/方向覆盖，但类型码、撤单—成交关联与深沪一致性尚未完成可靠验证，不能计算补单率/撤单率。委托序号是关联键，不是机构母单身份。</p></div></div><p class=muted>盘中深查仅覆盖页面重点候选；全市场部分为日级聚合。盘后15:30快照不作15:00可执行盘口。本报告不构成交易授权。</p></main><dialog id=dlg><button onclick="dlg.close()">关闭</button><div id=detail></div></dialog><script>const D='''+P+''';const M=v=>{let a=Math.abs(v),s=v<0?'-':'';return a>=1e8?s+(a/1e8).toFixed(2)+'亿':s+(a/1e4).toFixed(1)+'万'},P=v=>v==null?'未知':(v>=0?'+':'')+v.toFixed(2)+'%',C=v=>v>=0?'pos':'neg';market.innerHTML=D.markets.map(x=>`<tr><td>${x.day}</td><td>${x.stocks}</td><td>${M(x.amount)}</td><td class=${C(x.net)}>${M(x.net)}</td><td>${x.up}/${x.down}</td><td>${x.vp95}%</td><td>${x.ap95}%</td></tr>`).join('');let z=D.markets.at(-1);metrics.innerHTML=`<div class="p metric"><b>${z.stocks}</b>纳入A股</div><div class="p metric"><b>${M(z.amount)}</b>成交额</div><div class="p metric"><b class=${C(z.net)}>${M(z.net)}</b>主动净额</div><div class="p metric"><b>${z.up}/${z.down}</b>上涨/下跌</div>`;function table(h,r){return `<div class=scroll><table><thead><tr>${h.map(x=>'<th>'+x+'</th>').join('')}</tr></thead><tbody>${r.join('')}</tbody></table></div>`}function render(){let q=search.value.toLowerCase(),f=filter.value,a=D.cards.filter(x=>(f==='全部'||x.label===f)&&(!q||x.code.toLowerCase().includes(q)||x.name.toLowerCase().includes(q)));if(sort.value!=='default')a.sort((x,y)=>y[sort.value]-x[sort.value]);cards.innerHTML=a.map(x=>`<article class=card onclick="openCard('${x.code}')"><span class=tag>${x.label}</span><h3>${x.name} <span class=muted>${x.code}</span></h3><div>收盘 ${x.close} · VWAP ${x.vwap}</div><div>涨跌 <b class=${C(x.ret)}>${P(x.ret)}</b> · 净额 <b class=${C(x.net)}>${M(x.net)}</b></div><div>十档 买 ${x.bid.toLocaleString()} / 卖 ${x.ask.toLocaleString()}</div></article>`).join('')}search.oninput=filter.onchange=sort.onchange=render;function openCard(c){let x=D.cards.find(y=>y.code===c);detail.innerHTML=`<h2>${x.name} ${x.code}</h2><p>${x.label} · 收盘 ${x.close} · VWAP ${x.vwap} · 净额比 ${P(x.ratio)}</p><p>连续竞价盘口时点 ${x.bookTime}；量/额对账误差 ${x.vgap}% / ${x.agap}%</p><h3>盘中主动成交</h3>${table(['时段','成交额','净额','VWAP'],x.segments.map(y=>`<tr><td>${y.s}</td><td>${M(y.a)}</td><td class=${C(y.n)}>${M(y.n)}</td><td>${y.v}</td></tr>`))}<h3>主动成交关联单分组</h3>${table(['金额组','净额','组数'],x.parents.map(y=>`<tr><td>${y.b}</td><td class=${C(y.n)}>${M(y.n)}</td><td>${y.c}</td></tr>`))}<h3>order_raw覆盖（非撤单结论）</h3>${table(['类型原值','方向','行数','数量'],x.orders.map(y=>`<tr><td>${y.t}</td><td>${y.s}</td><td>${y.r.toLocaleString()}</td><td>${y.q.toLocaleString()}</td></tr>`))}<h3>信号轨迹/独立后验</h3>${table(['信号日','当时标签','当日','净额','后1日','后3日'],x.history.map(y=>`<tr><td>${y.day}</td><td>${y.label}</td><td>${P(y.ret)}</td><td class=${C(y.net)}>${M(y.net)}</td><td>${P(y.f1)}</td><td>${P(y.f3)}</td></tr>`))}`;dlg.showModal()}render();</script></body></html>'''
-HTML=HTML.replace('本报告收盘取数值时间≤15:00最后正价；盘口取&lt;14:57连续竞价末档','本报告日终收盘取数值时间最后正价（可能为延迟发布的闭市结果，不解释为可交易时点）；盘口取&lt;14:57连续竞价末档')
-HTML=HTML.replace('<b>7/7 发布门槛通过</b>','<b>7/7 发布门槛通过</b><p>'+('；'.join(x['day']+' warnings='+str(x['warnings']) for x in gates))+'</p>')
-HTML=HTML.replace('本地只有9个证据日，20日不足，不替换日期。','本报告分析窗口为尾部7个交易日；20日窗口未计算，不用其他日期替换。各日转换 warning 数已嵌入数据门槛。')
-HTML=HTML.replace('以主动净额比45%+涨跌幅30%+成交额15%+连续竞价末档十档不平衡10%横截面排序。','按透明的主动净额比横截面排序；涨跌幅、成交额与真实十档作为并列事实，不合成未经校准的概率分。')
-HTML=HTML.replace('<option>高位分歧风险</option>','<option>被动承接候选（未确认）</option><option>高位分歧风险</option>')
-HTML=HTML.replace('重点候选盘中价格/VWAP、五时段主动成交','重点候选收盘/VWAP、五时段主动成交')
-HTML=HTML.replace("a=D.cards.filter(x=>(f==='全部'||x.label===f)&&(!q||x.code.toLowerCase().includes(q)||x.name.toLowerCase().includes(q)))","a=D.cards.filter(x=>(q||f!=='全部'||x.detail)&&(f==='全部'||x.label===f)&&(!q||x.code.toLowerCase().includes(q)||x.name.toLowerCase().includes(q)))")
-HTML=HTML.replace("detail.innerHTML=`<h2>${x.name}","detail.innerHTML=`<h2>${x.name}")
-HTML=HTML.replace("<h3>盘中主动成交</h3>${table(","${x.detail?'<h3>重点深查</h3>':'<p class=warn>该股仅有全市场日级轨迹；盘中分段、关联单和 order_raw 深查未计算。</p>'}<h3>盘中主动成交</h3>${table(")
-HTML=HTML.replace('连续竞价盘口时点 ${x.bookTime}；量/额对账误差','日终证据发布时点 ${x.closeTime}（非可交易时点）；连续竞价盘口时点 ${x.bookTime}；常规时段五段成交额覆盖全天 ${x.regularCoverage==null?\'未计算\':x.regularCoverage+\'%\'}，其余含竞价或时钟异常记录；量/额对账误差')
-HTML=HTML.replace('按透明的主动净额比横截面排序；涨跌幅、成交额与真实十档作为并列事实，不合成未经校准的概率分。','分池后透明排序：主动推动/主动承接按净额比降序，分歧/弱势按净额比升序，被动承接按涨跌幅降序；池间可能重叠，标签按页面优先级互斥；不合成未经校准的概率分。')
-HTML=HTML.replace('后验1/3日只用于历史验证，不回填当时信号。','后1/3日只展示历史原始收盘变化，不回填当时信号；未复权且存在目标日存续样本选择偏差，不是无偏回测或信号有效性验证。')
-HTML=HTML.replace('信号轨迹/独立后验','信号轨迹/历史原始收盘变化（未复权、非策略回测）')
-HTML=HTML.replace('状态迁移与独立后验','标签历史与原始收盘后续变化')
-HTML=HTML.replace('x.segments.map(', '[...x.segments].sort((a,b)=>a.s.localeCompare(b.s)).map(')
-HTML=HTML.replace('x.parents.map(', "[...x.parents].sort((a,b)=>['<5万','5–20万','20–100万','≥100万'].indexOf(a.b)-['<5万','5–20万','20–100万','≥100万'].indexOf(b.b)).map(")
-HTML=HTML.replace('<option value=全部>全部</option>', '<option value=全部>全部类型（默认重点股）</option>')
-HTML=HTML.replace('<div id=cards class=grid></div>', '<p class=muted>默认显示33只重点深查股；输入代码或名称可搜索5,209只股票。深查并不等于买入推荐。</p><div id=cards class=grid></div>')
-HTML=HTML.replace('本报告不构成交易授权。', '盘中价格曲线、补撤单重建、支撑强度、买卖触发与失效验证尚未完成；这些状态为未验证，并非没有信号。本报告不构成交易授权。')
-HTML=HTML.replace('<select id=sort>', '<select id=direction aria-label="涨跌方向"><option value=all>全部涨跌</option><option value=up>↑ 上涨</option><option value=down>↓ 下跌</option><option value=flat>— 平盘</option></select><select id=sort>')
-HTML=HTML.replace("(q||f!=='全部'||x.detail)", "(q||f!=='全部'||direction.value!=='all'||x.detail)")
-HTML=HTML.replace("(f==='全部'||x.label===f)&&", "(f==='全部'||x.label===f)&&(direction.value==='all'||(direction.value==='up'&&x.ret>0)||(direction.value==='down'&&x.ret<0)||(direction.value==='flat'&&x.ret===0))&&")
-HTML=HTML.replace('<span class=tag>${x.label}</span>', '<span class=tag>${x.label}</span> · <b class="${x.ret>0?\'pos\':x.ret<0?\'neg\':\'muted\'}">${x.ret>0?\'↑ 上涨\':x.ret<0?\'↓ 下跌\':\'— 平盘\'}</b>')
-HTML=HTML.replace('search.oninput=filter.onchange=sort.onchange=render;', 'search.oninput=filter.onchange=direction.onchange=sort.onchange=render;')
-HTML=HTML.replace('输入代码或名称可搜索5,209只股票。', '输入代码或名称可搜索5,209只股票；选择涨跌方向可筛选全库，并可与候选类型组合。')
-HTML=HTML.replace('x.ret>0', 'x.returnSign>0').replace('x.ret<0', 'x.returnSign<0').replace('x.ret===0', 'x.returnSign===0')
-HTML=HTML.replace('<select id=sort>', '<select id=sort aria-label="排序指标">')
-HTML=HTML.replace('<option value=amount>成交额</option></select>', '<option value=amount>成交额</option></select><select id=sortOrder aria-label="排序方向" disabled><option value=desc>倒序（大 → 小）</option><option value=asc>正序（小 → 大）</option></select>')
-HTML=HTML.replace("function render(){", "function render(){sortOrder.disabled=sort.value==='default';")
-HTML=HTML.replace('a.sort((x,y)=>y[sort.value]-x[sort.value])', "a.sort((x,y)=>(sortOrder.value==='asc'?1:-1)*(x[sort.value]-y[sort.value]))")
-HTML=HTML.replace('direction.onchange=sort.onchange=render;', 'direction.onchange=sort.onchange=sortOrder.onchange=render;')
-from level2_kline import add_kline
-HTML=HTML.replace('const M=v=>{let a=',"const M=v=>{if(v==null)return '未知';let a=")
-HTML=HTML.replace("C=v=>v>=0?'pos':'neg'","C=v=>v==null?'muted':v>=0?'pos':'neg'")
-HTML=HTML.replace('<option>弱势流出/其他</option>','<option>弱势流出/其他</option><option>方向未知／证据不足</option>')
-HTML=HTML.replace("(sortOrder.value==='asc'?1:-1)*(x[sort.value]-y[sort.value])", "(x[sort.value]==null?(y[sort.value]==null?x.code.localeCompare(y.code):1):y[sort.value]==null?-1:(sortOrder.value==='asc'?1:-1)*(x[sort.value]-y[sort.value])||x.code.localeCompare(y.code))")
-HTML=HTML.replace('<h2>最近7交易日市场轨迹</h2>',render_quality(data['quality'])+'<h2>最近7交易日市场轨迹</h2>')
-HTML=HTML.replace('<h3>主动成交关联单分组</h3>','<h3>主动成交关联编号分组（身份未验证）</h3><p>按日期、股票、方向、正数编号聚合；频道缺失，不能称为机构母单。关联键未知一行按成交条数计数，不参与金额分档。</p>')
-HTML=HTML.replace('本报告分析窗口为尾部7个交易日；20日窗口未计算，不用其他日期替换。','基础报告按统一交易日历取7日；更长窗口由连续观察独立计算，不跳过缺失日。')
-HTML=HTML.replace('C零价格记录不混入成交。','C记录排除；未知方向金额单列，存在未知方向的净额和候选结论降级，不当作零。')
-HTML=HTML.replace('<div>十档 买 ${x.bid.toLocaleString()}', '<div>方向未知金额 ${M(x.unknownAmount)}；${x.directionStatus===\'UNKNOWN\'?\'资金方向不可判定\':\'方向可计算\'}</div><div>十档 买 ${x.bid.toLocaleString()}')
-HTML, kline_bundle = add_kline(HTML, cards, TARGET, embedded=False)
-from level2_report_html import add_detail_controls
-HTML = add_detail_controls(HTML)
-HTML=HTML.replace('2026-09-22',f'{TARGET[:4]}-{TARGET[4:6]}-{TARGET[6:]}')
-HTML=HTML.replace('33只',str(len(codes))+'只').replace('5,209只',f'{len(cards):,}只')
-OUT.write_text(HTML,encoding='utf-8'); print(OUT); print('days',len(DATES),'stocks',len(latest),'cards',len(cards),'bytes',OUT.stat().st_size)
+segment_order={'09:30–10:00':0,'10:00–10:30':1,'10:30–11:30':2,'13:00–14:00':3,'14:00–收盘':4}
+parent_order={'<5万':0,'5–20万':1,'20–100万':2,'≥100万':3,'关联键未知':4}
+for card in cards:
+ card['segments'].sort(key=lambda row:segment_order.get(row['s'],99))
+ card['parents'].sort(key=lambda row:parent_order.get(row['b'],99))
+ card['orders'].sort(key=lambda row:(row['t'],row['s']))
+cards.sort(key=lambda card:card['code'])
+P=json.dumps(data,ensure_ascii=False,separators=(',',':'),allow_nan=False)
+OUT.parent.mkdir(parents=True,exist_ok=True)
+OUT.write_text(P,encoding='utf-8')
+print(OUT); print('days',len(DATES),'stocks',len(latest),'cards',len(cards),'bytes',OUT.stat().st_size)

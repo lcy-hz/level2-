@@ -1,14 +1,10 @@
-"""Independent invariant checks for the embedded, source-backed HTML report."""
+"""Independent invariant checks for the source-backed JSON report."""
 import json
 import math
-import re
 from pathlib import Path
 
-path = Path(__file__).with_name('level2-market-scan_20260922.html')
-html = path.read_text(encoding='utf-8')
-start = re.search(r'const\s+D\s*=\s*', html)
-assert start, 'Missing report data'
-data, _ = json.JSONDecoder().raw_decode(html[start.end():])
+path = Path(__file__).parent/'.level2_reports'/'20260922'/'report.json'
+data=json.loads(path.read_text(encoding='utf-8'))
 expected_days = ['20260914', '20260915', '20260916', '20260917', '20260918', '20260921', '20260922']
 assert [x['day'] for x in data['markets']] == expected_days
 cards = {x['code']: x for x in data['cards']}

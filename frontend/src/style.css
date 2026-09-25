@@ -18,3 +18,4 @@
 .price-state-strip{grid-template-columns:repeat(3,minmax(0,1fr))}.price-breadth-line{border-top:1px solid #2d465b;padding-top:7px}@media(max-width:620px){.price-state-strip{grid-template-columns:1fr}}
 .benchmark-evidence{display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;margin:10px 0}.benchmark-evidence p{margin:6px 0}.benchmark-evidence small{color:#a8bdcd}.benchmark-evidence details{min-width:0;max-width:100%}
 .quote-coverage{display:block;color:#9db9c8;font-size:11px;margin-top:3px}
+.advanced-filters{margin:12px 0;padding:12px}.advanced-filters .state-stock-filters{grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}.advanced-filters input,.advanced-filters select{border:1px solid #38536b;background:#11263a;color:#e8f2f9;border-radius:9px;padding:8px}.advanced-filters>button{border:1px solid #45627b;border-radius:8px;background:#142d42;color:#e7f0fa;padding:7px 11px}.advanced-filters .footnote{margin:10px 0}

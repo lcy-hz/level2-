@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 import tempfile
 import unittest
@@ -31,15 +32,14 @@ class WorkspaceTests(unittest.TestCase):
             audit=self.root/'_conversion_audit'/day;audit.mkdir(parents=True)
             (audit/'COMMITTED').touch();(audit/'manifest.json').write_text('{"commit_state":"COMMITTED"}')
         self.data={'markets':[{'day':'20260907'}],'cards':[{'code':'000001.SZ','close':12}]}
-        self.report=self.base/'report.html'
-        self.report.write_text('<head></head><body><script>const D='+json.dumps(self.data)+';</script></body>')
-        (self.base/'level2_workspace_ui.html').write_text('<div>snapshot controls</div>')
-        self.patcher=patch('level2_detail_server.REPORT',self.report);self.patcher.start()
+        self.report=self.base/'.level2_reports'/'20260907'/'report.json'
+        self.report.parent.mkdir(parents=True)
+        self.report.write_text(json.dumps(self.data))
         self.service=SimpleNamespace(root=self.root,day='20260907',report=self.data,cards={'000001.SZ':self.data['cards'][0]})
         self.w=Workspace(self.service,self.base,self.calendar)
 
     def tearDown(self):
-        self.w.pool.shutdown();self.w.state.pool.shutdown();self.patcher.stop();self.temp.cleanup()
+        self.w.pool.shutdown();self.w.state.pool.shutdown();self.temp.cleanup()
 
     def test_missing_window_not_substituted(self):
         self.assertTrue(self.w.dates()[0]['canBuild'])
@@ -59,14 +59,24 @@ class WorkspaceTests(unittest.TestCase):
     def test_snapshot_is_frozen(self):
         receipt=self.w.record_chart({'day':'20260907','code':'000001.SZ','source':str(self.base),'labels':[],'bars':[[1,2,3]]},'day')
         result=self.w.save({'day':'20260907','data':copy.deepcopy(self.data),'filters':{'search':'000001'},'charts':{'day/000001.SZ':receipt}})
-        before=self.w.frozen_page(result['id'])
+        saved=self.w.snapshot_path(result['id'])
+        before=(saved/'bundle.json').read_bytes()
         self.report.write_text('changed live report')
-        self.assertEqual(before,self.w.frozen_page(result['id']))
-        self.assertIn(b'"mode":"snapshot"',before)
+        self.assertEqual(before,(saved/'bundle.json').read_bytes())
+        self.assertFalse((saved/'report.html').exists())
+        self.assertEqual((saved/'COMMITTED').read_text(),hashlib.sha256(before).hexdigest())
         self.assertEqual(result['chartCount'],1)
         frozen=self.w.snapshot_document(result['id'])
         self.assertEqual(frozen['charts']['day/000001.SZ']['bars'],[[1,2,3]])
         self.assertEqual(frozen['charts'].get('minute/000001.SZ'),None)
+
+    def test_snapshot_preserves_record_order_instead_of_resorting_legacy_evidence(self):
+        second={'code':'000002.SZ','close':8}
+        self.data['cards'].insert(0,second)
+        self.service.cards={card['code']:card for card in self.data['cards']}
+        saved=self.w.save({'day':'20260907','data':copy.deepcopy(self.data)})
+        frozen=self.w.snapshot_document(saved['id'])
+        self.assertEqual([card['code'] for card in frozen['report']['cards']],['000002.SZ','000001.SZ'])
 
     def test_snapshot_freezes_only_verified_full_detail(self):
         detail={'code':'000001.SZ','day':'20260907','tradeRows':42,'amount':1000,'net':30,
@@ -145,7 +155,7 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(bundle['stateViews']['1']['benchmark']['returnPct'],1)
         self.assertEqual(bundle['stateViews']['1']['peers']['sizeCoverage'],1)
         self.assertEqual(bundle['stateViews']['1']['stocks'][0]['totalMv'],1000)
-        self.assertIn(b'stateViews',self.w.frozen_page(result['id']))
+        self.assertIn(b'stateViews',(self.w.snapshot_path(result['id'])/'bundle.json').read_bytes())
         self.assertEqual(self.w.snapshot_document(result['id'])['stateViews']['1']['trajectory'][0]['ratio'],10)
 
     def test_snapshot_exposes_only_saved_pattern_result_and_viewed_details(self):
@@ -189,7 +199,22 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_corrupt_snapshot_rejected(self):
         result=self.w.save({'day':'20260907','data':self.data})
-        (self.w.snapshot_path(result['id'])/'report.html').write_text('corrupt')
-        with self.assertRaises(ValueError):self.w.frozen_page(result['id'])
+        (self.w.snapshot_path(result['id'])/'bundle.json').write_text('corrupt')
+        with self.assertRaises(ValueError):self.w.snapshot_document(result['id'])
+
+    def test_existing_html_snapshot_remains_readable_without_serving_old_page(self):
+        identifier='a'*32
+        directory=self.w.snapshot_path(identifier);directory.mkdir(parents=True)
+        context={'mode':'snapshot','id':identifier,'day':'20260907','charts':{},'stateViews':{}}
+        html='<head><script>window.L2_CONTEXT='+json.dumps(context)+'</script></head><body><script>const D='+json.dumps(self.data)+'</script></body>'
+        bundle={'id':identifier,'day':'20260907','savedAt':'2026-09-07T00:00:00Z',
+                'chartCount':0,'report':self.data,'payloadSha256':digest(self.data),
+                'reportProvenance':{},'scope':'旧快照测试'}
+        (directory/'report.html').write_text(html)
+        (directory/'bundle.json').write_text(json.dumps(bundle))
+        (directory/'COMMITTED').write_text(hashlib.sha256(html.encode()).hexdigest())
+        result=self.w.snapshot_document(identifier)
+        self.assertEqual(result['report'],self.data)
+        self.assertEqual(result['integrity']['report'],'verified-against-frozen-html')
 
 if __name__=='__main__':unittest.main()

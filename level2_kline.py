@@ -6,11 +6,9 @@ Red hollow = close >= open; green filled = close < open (A-share convention).
 The original Level-2 report's unadjusted prices/returns are not changed.
 """
 from pathlib import Path
-import json
 import re
 import pandas as pd
 
-BASE = Path(__file__).parent
 from level2_paths import PATHS
 SOURCE = PATHS['stk_factor_pro_by_code']
 CALENDAR = PATHS['daily']
@@ -96,41 +94,3 @@ def build_bundle(codes, target, source=SOURCE, calendar=CALENDAR, count=60, incl
             'missingFiles': [d for d in dates if d not in files],
             'method': '直接读取stk_factor_pro qfq OHLC，沿用来源复权基准，不依赖adj_factor；元/股；成交量 vol 单位手，不复权；amount 千元转换为元',
             'series': series}
-
-
-def refresh_kline_ui(html):
-    """Refresh interaction without rebuilding or changing the daily data payload."""
-    html = minute_availability_note(html)
-    payload = re.search(r'<script id="kline-data" type="application/json">(.*?)</script>', html, re.S)
-    if not payload:
-        raise ValueError('Existing daily chart payload not found')
-    feature = (BASE / 'level2_kline_ui.html').read_text(encoding='utf-8').replace('__KLINE_PAYLOAD__', payload[1])
-    return re.sub(r'<!-- KLINE START -->.*?<!-- KLINE END -->',
-                  lambda _: '<!-- KLINE START -->'+feature+'<!-- KLINE END -->', html, flags=re.S)
-
-
-def add_kline(html, cards, target, embedded=True):
-    # Idempotent: refresh only this feature, retaining verified Level-2 payload.
-    html = re.sub(r'<!-- KLINE START -->.*?<!-- KLINE END -->', '', html, flags=re.S)
-    html = minute_availability_note(html)
-    bundle = build_bundle({c['code'] for c in cards}, target) if embedded else {'target':target,'dates':[],'series':{},'source':str(SOURCE),'method':'悬浮时读取本地文件'}
-    payload = json.dumps(bundle, ensure_ascii=False, separators=(',', ':'), allow_nan=False).replace('<', '\\u003c')
-    assets = (BASE / 'level2_kline_ui.html').read_text(encoding='utf-8')
-    feature = '<!-- KLINE START -->' + assets.replace('__KLINE_PAYLOAD__', payload) + '<!-- KLINE END -->'
-    return html.replace('</body>', feature + '</body>'), bundle
-
-
-def minute_availability_note(html):
-    return html.replace('盘中价格曲线、补撤单重建、支撑强度、买卖触发与失效验证尚未完成；',
-                        '当日分钟K线可通过代码右侧“分”图标查看；补撤单重建、支撑强度、买卖触发与失效验证尚未完成；')
-
-
-if __name__ == '__main__':
-    path = BASE / 'level2-market-scan_20260922.html'
-    html = path.read_text(encoding='utf-8')
-    start = re.search(r'const\s+D\s*=\s*', html)
-    data, _ = json.JSONDecoder().raw_decode(html[start.end():])
-    html, bundle = add_kline(html, data['cards'], data['markets'][-1]['day'])
-    path.write_text(html, encoding='utf-8')
-    print(json.dumps({'stocks': len(bundle['series']), 'withCandles': sum(bool(x['bars']) for x in bundle['series'].values()),
-                      'sessions': len(bundle['dates']), 'missingFiles': bundle['missingFiles'], 'bytes': path.stat().st_size}))

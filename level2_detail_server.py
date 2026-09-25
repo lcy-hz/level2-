@@ -5,6 +5,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Lock, BoundedSemaphore
 from urllib.parse import urlsplit, parse_qs
+from urllib.parse import urlencode
 import argparse
 import hashlib
 import json
@@ -13,21 +14,23 @@ import re
 import duckdb
 from level2_contract import native_ticks,KNOWN_NET,UNKNOWN_AMOUNT,COMPLETE_NET,parent_query
 from level2_quote_path import quote_path
-from level2_report_html import add_detail_controls
 
 BASE = Path(__file__).resolve().parent
-REPORT = BASE / 'level2-market-scan_20260922.html'
+LEGACY_BOOKMARK = 'level2-market-scan_20260922.html'
+JSON_REPORT = BASE / '.level2_reports' / '20260922' / 'report.json'
+REPORT = JSON_REPORT
+FRONTEND = BASE / 'frontend' / 'dist'
 from level2_paths import PATHS
 SOURCE = PATHS['level2']
 CACHE = BASE / '.level2_detail_cache'
 
 
 def read_report(path=REPORT):
-    text = path.read_text(encoding='utf-8')
-    marker = re.search(r'const\s+D\s*=\s*', text)
-    if not marker:
-        raise ValueError('报告缺少数据载荷')
-    return json.JSONDecoder().raw_decode(text[marker.end():])[0]
+    if Path(path).suffix != '.json':raise ValueError('正式报告必须是 JSON')
+    data=json.loads(Path(path).read_text(encoding='utf-8'))
+    if not isinstance(data,dict) or not isinstance(data.get('markets'),list) or not isinstance(data.get('cards'),list):
+        raise ValueError('报告 JSON 结构无效')
+    return data
 
 
 def source_identity(day, root=SOURCE):
@@ -206,6 +209,34 @@ def make_handler(service, port, minute_service=None, workspace=None):
             path = urlsplit(self.path).path
             query=parse_qs(urlsplit(self.path).query)
             day=query.get('date',[service.day])[0]
+            if path == '/' + LEGACY_BOOKMARK:
+                # Historical bookmarks keep their selected evidence, but the old
+                # HTML renderer is no longer a second user-facing application.
+                selection={key:query[key][0] for key in ('snapshot','date') if key in query}
+                self.send_response(307)
+                self.send_header('Location','/'+('?' + urlencode(selection) if selection else ''))
+                self.send_header('Cache-Control','no-store')
+                self.end_headers()
+                return
+            if path == '/' or path.startswith('/assets/'):
+                target=FRONTEND/'index.html' if path == '/' else FRONTEND/'assets'/path.removeprefix('/assets/')
+                if path.startswith('/assets/') and (target.name != path.removeprefix('/assets/') or target.suffix not in ('.js','.css','.svg','.png','.woff2')):
+                    self.send_error(404)
+                    return
+                if not target.is_file():
+                    self.send_error(503 if path == '/' else 404, 'Vue 页面尚未构建；请在 frontend 运行 npm run build')
+                    return
+                body=target.read_bytes()
+                content_type={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8',
+                              '.css':'text/css; charset=utf-8','.svg':'image/svg+xml',
+                              '.png':'image/png','.woff2':'font/woff2'}[target.suffix]
+                self.send_response(200)
+                self.send_header('Content-Type',content_type)
+                self.send_header('Cache-Control','no-store')
+                self.send_header('Content-Length',str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if workspace and path=='/api/validation/status':
                 try:self.respond(workspace.validation.status(query.get('id',[''])[0]))
                 except (ValueError, OSError, KeyError) as exc:self.respond({'status':'error','message':str(exc)},400)
@@ -256,19 +287,7 @@ def make_handler(service, port, minute_service=None, workspace=None):
                 except (ValueError, OSError, KeyError) as exc:
                     self.respond({'status':'error','message':str(exc)},400)
                 return
-            if path in ('/', '/' + REPORT.name):
-                try:
-                    body = (workspace.frozen_page(query['snapshot'][0]) if 'snapshot' in query else workspace.page(day)) if workspace else REPORT.read_bytes()
-                except Exception as exc:
-                    self.respond({'status':'error','message':str(exc)},400)
-                    return
-                self.send_response(200)
-                self.send_header('Content-Type', 'text/html; charset=utf-8')
-                self.send_header('Cache-Control', 'no-store')
-                self.send_header('Content-Length', str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-            elif path.startswith('/api/detail/'):
+            if path.startswith('/api/detail/'):
                 try:
                     current=workspace.get_service(day) if workspace else service
                     self.respond(current.status(path.removeprefix('/api/detail/')))
@@ -350,26 +369,21 @@ def make_handler(service, port, minute_service=None, workspace=None):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int, default=18762)
-    parser.add_argument('--install-ui', action='store_true')
     args = parser.parse_args()
-    if args.install_ui:
-        REPORT.write_text(add_detail_controls(REPORT.read_text()), encoding='utf-8')
-        print('Installed on-demand detail controls')
-    else:
-        service = Service()
-        from level2_intraday import calculate_intraday, minute_identity
-        minute_service = Service(report=service.report, cache=BASE / '.level2_minute_cache', calculator=calculate_intraday, identity=minute_identity)
-        from level2_workspace import Workspace
-        workspace=Workspace(service)
-        server = ThreadingHTTPServer(('127.0.0.1', args.port), make_handler(service, args.port, minute_service, workspace))
-        print(f'Local Level-2 service: http://127.0.0.1:{args.port}/{REPORT.name}', flush=True)
-        try:
-            server.serve_forever()
-        finally:
-            server.server_close()
-            service.pool.shutdown(wait=False, cancel_futures=True)
-            minute_service.pool.shutdown(wait=False, cancel_futures=True)
-            workspace.pool.shutdown(wait=False, cancel_futures=True)
-            workspace.state.pool.shutdown(wait=False, cancel_futures=True)
-            if workspace._patterns:workspace._patterns.pool.shutdown(wait=False,cancel_futures=True)
-            if workspace._validation:workspace._validation.pool.shutdown(wait=False,cancel_futures=True)
+    service = Service()
+    from level2_intraday import calculate_intraday, minute_identity
+    minute_service = Service(report=service.report, cache=BASE / '.level2_minute_cache', calculator=calculate_intraday, identity=minute_identity)
+    from level2_workspace import Workspace
+    workspace=Workspace(service)
+    server = ThreadingHTTPServer(('127.0.0.1', args.port), make_handler(service, args.port, minute_service, workspace))
+    print(f'Local Level-2 service: http://127.0.0.1:{args.port}/', flush=True)
+    try:
+        server.serve_forever()
+    finally:
+        server.server_close()
+        service.pool.shutdown(wait=False, cancel_futures=True)
+        minute_service.pool.shutdown(wait=False, cancel_futures=True)
+        workspace.pool.shutdown(wait=False, cancel_futures=True)
+        workspace.state.pool.shutdown(wait=False, cancel_futures=True)
+        if workspace._patterns:workspace._patterns.pool.shutdown(wait=False,cancel_futures=True)
+        if workspace._validation:workspace._validation.pool.shutdown(wait=False,cancel_futures=True)

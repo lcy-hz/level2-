@@ -1,5 +1,6 @@
 import unittest
 import tempfile
+import json
 from pathlib import Path
 from unittest.mock import patch
 from types import SimpleNamespace
@@ -157,6 +158,25 @@ class StateTests(unittest.TestCase):
             with patch.object(service,'identity',return_value='changed'):
                 with self.assertRaises(ValueError):service.frozen({'5':token},'20260922')
             service.pool.shutdown()
+
+    def test_saved_state_restores_after_restart_only_for_matching_source(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base=Path(temp);receipts=base/'.level2_state_receipts';receipts.mkdir()
+            token='a'*32
+            result={'day':'20260922','window':3,'identity':'current','states':{}}
+            (receipts/f'{token}.json').write_text(json.dumps(result))
+            (receipts/'latest_20260922_3.json').write_text(json.dumps({'receipt':token,'identity':'current'}))
+            service=StateService(SimpleNamespace(base=base,root=base))
+            with patch.object(service,'validate',return_value=DAYS),patch.object(service,'identity',return_value='current'):
+                restored=service.status('20260922',3)
+                self.assertEqual(restored['status'],'done')
+                self.assertEqual(restored['receipt'],token)
+                self.assertEqual(restored['result'],result)
+            service.pool.shutdown()
+            changed=StateService(SimpleNamespace(base=base,root=base))
+            with patch.object(changed,'validate',return_value=DAYS),patch.object(changed,'identity',return_value='changed'):
+                self.assertEqual(changed.status('20260922',3)['status'],'stale')
+            changed.pool.shutdown()
 
     def test_window_shortage(self):
         rows={d:row(1) for d in DAYS}

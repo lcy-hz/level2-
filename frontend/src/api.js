@@ -15,6 +15,8 @@ export async function postJson(path, body) {
 
 export const dates = () => getJson('/api/dates')
 export const report = day => getJson(`/api/report/data?date=${encodeURIComponent(day)}`)
+export const reportStatus = day => getJson(`/api/report/status?date=${encodeURIComponent(day)}`)
+export const startReportBuild = day => postJson('/api/report/build', { day })
 export const snapshot = id => getJson(`/api/snapshot/data?id=${encodeURIComponent(id)}`)
 export const snapshots = () => getJson('/api/snapshots')
 export const startState = (day, window) => postJson('/api/state', { day, window })

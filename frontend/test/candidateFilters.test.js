@@ -19,6 +19,21 @@ test('descending sort leaves unknown values last', () => {
   assert.deepEqual(filterCandidates(rows, { order: 'net' }).map(row => row.code), ['000003.SZ', '000001.SZ', '000002.SZ'])
 })
 
+test('legacy focus defaults to deep-researched cards but explicit filters use the full universe', () => {
+  const sample = rows.map((row, index) => ({ ...row, detail: index !== 1 }))
+  assert.deepEqual(filterCandidates(sample, { focusOnly: true }).map(row => row.code),
+    ['000001.SZ', '000003.SZ'])
+  assert.deepEqual(filterCandidates(sample, { query: '乙', focusOnly: false }).map(row => row.code),
+    ['000002.SZ'])
+})
+
+test('default candidate order preserves each report or frozen snapshot record order', () => {
+  const report = [rows[2], rows[0], rows[1]].map(card => ({ ...card, detail: true }))
+  assert.deepEqual(filterCandidates(report, { focusOnly: true }).map(card => card.code),
+    ['000003.SZ', '000001.SZ', '000002.SZ'])
+  assert.deepEqual(report.map(card => card.code), ['000003.SZ', '000001.SZ', '000002.SZ'])
+})
+
 test('candidate filters intersect with the applied continuous window and sort missing last both ways', () => {
   const stateView = { applicable: true, stocks: [
     { code: '000001.SZ', change: 'improve', level: -1, viewDelta: 0.00001, streak: 2 },

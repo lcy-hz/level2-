@@ -100,8 +100,7 @@ class Workspace:
         # changes do not, while name data and imported calculators do.
         result.extend(fingerprint(self.base/p) for p in [
             'generate_level2_report.py','level2_contract.py','level2_quality.py',
-            'level2_paths.py','level2_kline.py',
-            'level2_kline_ui.html','level2_report_html.py','level2_detail_ui.html'])
+            'level2_paths.py'])
         return result
 
     def dates(self):
@@ -127,8 +126,7 @@ class Workspace:
 
     def report_path(self,day):
         if not isinstance(day,str) or not DATE.fullmatch(day):raise ValueError('日期格式无效')
-        from level2_detail_server import REPORT
-        return REPORT if day==self.default.day else self.reports/day/'report.html'
+        return self.reports/day/'report.json'
 
     def status(self,day):
         path=self.report_path(day)
@@ -174,9 +172,9 @@ class Workspace:
         return {'status':'queued','message':'已提交全市场报告计算'}
 
     def _build(self,day,window):
-        target=self.report_path(day)
+        target=self.reports/day/'report.json'
         target.parent.mkdir(parents=True,exist_ok=True)
-        tmp=target.with_suffix('.building.html')
+        tmp=target.with_suffix('.building.json')
         initial=self.sources(day)
         try:
             with self.lock:self.jobs[day]={'status':'running','message':'正在扫描原始 Level-2 全市场数据…'}
@@ -213,29 +211,6 @@ class Workspace:
         (self.receipts/f'{receipt}.json').write_text(encoded(value))
         return receipt
 
-    def decorate(self,html,context):
-        # One canonical toolbar; context precedes all chart/detail scripts.
-        html=re.sub(r'<!-- WORKSPACE START -->.*?<!-- WORKSPACE END -->','',html,flags=re.S)
-        config='<script>window.L2_CONTEXT='+encoded(context)+';window.L2_CAPTURE={charts:{},states:{}};</script>'
-        html=html.replace('<head>','<head>'+config,1)
-        state_ui=self.base/'level2_state_ui.html'
-        model=self.base/'level2_state_view.js'
-        model_script='<script>'+model.read_text()+'</script>' if model.exists() else ''
-        pattern_ui=self.base/'level2_patterns_ui.html'
-        return html.replace('</body>','<!-- WORKSPACE START -->'+(self.base/'level2_workspace_ui.html').read_text()+model_script+(state_ui.read_text() if state_ui.exists() else '')+(pattern_ui.read_text() if pattern_ui.exists() else '')+'<!-- WORKSPACE END --></body>')
-
-    def page(self,day):
-        if self.status(day)['status']!='ready':
-            html='''<html><head><meta charset="utf-8"><title>Level-2 报告待计算</title><style>
-                body{box-sizing:border-box;margin:0;background:#101820;color:#e7f0fa;font:16px/1.6 system-ui,-apple-system,sans-serif}
-                main{max-width:1100px;margin:0 auto;padding:24px}
-                h1{font-size:28px;margin:0 0 18px}
-                .unavailable{padding:18px 20px;border:1px solid #416781;border-radius:10px;background:#172435;color:#c9d8e7}
-                </style></head><body><main><h1>连续市场与个股证据报告</h1><p class="unavailable">当前报告未就绪或来源已变化。请在上方选择日期并计算；完成前不展示旧数据。</p></main></body></html>'''
-            return self.decorate(html,{'mode':'live','day':day,'unavailable':True}).encode()
-        self.get_service(day)
-        return self.decorate(self.report_path(day).read_text(),{'mode':'live','day':day}).encode()
-
     def snapshot_path(self,identifier):
         if not isinstance(identifier,str) or not ID.fullmatch(identifier):raise ValueError('快照编号无效')
         return self.snapshots/identifier
@@ -245,7 +220,9 @@ class Workspace:
         for p in self.snapshots.glob('*/bundle.json'):
             if not (p.parent/'COMMITTED').exists():continue
             try:
-                b=json.loads(p.read_text());result.append({k:b[k] for k in ['id','day','savedAt','chartCount']})
+                raw=p.read_bytes();b=json.loads(raw)
+                if b.get('format')=='vue-json' and (p.parent/'COMMITTED').read_text()!=hashlib.sha256(raw).hexdigest():continue
+                result.append({k:b[k] for k in ['id','day','savedAt','chartCount']})
             except (OSError,ValueError,KeyError):continue
         return sorted(result,key=lambda b:b['savedAt'],reverse=True)
 
@@ -315,24 +292,19 @@ class Workspace:
         ui=request.get('patternUI',{})
         if not isinstance(ui,dict) or len(encoded(ui))>10000:raise ValueError('形态视图参数无效')
         context['patternUI']=ui
-        template=self.report_path(day).read_text()
-        marker=re.search(r'const\s+D\s*=\s*',template)
-        _,length=json.JSONDecoder().raw_decode(template[marker.end():])
-        html=template[:marker.end()]+encoded(data)+template[marker.end()+length:]
-        html=self.decorate(html,context)
         provenance=self.report_path(day).with_suffix('.provenance.json')
-        bundle={'id':identifier,'day':day,'savedAt':saved,'chartCount':len(charts),'report':data,'filters':filters,
+        bundle={'format':'vue-json','id':identifier,'day':day,'savedAt':saved,'chartCount':len(charts),'report':data,'filters':filters,
                 'stateViews':views,
                 'patterns':pattern_result,'patternUI':ui,'validation':validation_result,
                 'validationDetails':validation_details,
-                'charts':receipts,'states':states,'stateWindow':state_window,'payloadSha256':digest(data),'htmlSha256':hashlib.sha256(html.encode()).hexdigest(),
+                'charts':charts,'chartReceipts':receipts,'states':states,'stateWindow':state_window,'payloadSha256':digest(data),
                 'reportProvenance':json.loads(provenance.read_text()) if provenance.exists() else {'status':'UNKNOWN_GENERATION_LINEAGE'},
                 'sourcesObservedAtSave':self.sources(day),
                 'scope':'整份当前报告与已加载详情；只冻结本次页面已成功读取的图表、观察窗口、形态、后续研究摘要及已查看逐股证据；其余明确未保存。历史日期快照不是历史当时可得性证明。'}
         directory=self.snapshot_path(identifier);directory.mkdir(parents=True,exist_ok=False)
-        (directory/'bundle.json').write_text(encoded(bundle))
-        (directory/'report.html').write_text(html)
-        (directory/'COMMITTED').write_text(bundle['htmlSha256'])
+        payload=encoded(bundle).encode('utf-8')
+        (directory/'bundle.json').write_bytes(payload)
+        (directory/'COMMITTED').write_text(hashlib.sha256(payload).hexdigest())
         return {'id':identifier,'day':day,'savedAt':saved,'chartCount':len(charts)}
 
     def frozen_page(self,identifier):
@@ -344,21 +316,31 @@ class Workspace:
     def snapshot_document(self,identifier):
         """Serve only the saved payload; never hydrate a snapshot from live data."""
         p=self.snapshot_path(identifier)
-        html=self.frozen_page(identifier).decode('utf-8')
-        bundle=json.loads((p/'bundle.json').read_text())
-        marker=re.search(r'const\s+D\s*=\s*',html)
-        if not marker:raise ValueError('快照报告缺少数据载荷')
-        frozen_report=json.JSONDecoder().raw_decode(html[marker.end():])[0]
-        context_marker=re.search(r'window\.L2_CONTEXT\s*=\s*',html)
-        if not context_marker:raise ValueError('快照缺少冻结上下文')
-        frozen_context=json.JSONDecoder().raw_decode(html[context_marker.end():])[0]
-        if (bundle.get('id')!=identifier or digest(bundle.get('report'))!=bundle.get('payloadSha256')
-                or digest(frozen_report)!=digest(bundle.get('report'))
-                or frozen_context.get('id')!=identifier or frozen_context.get('day')!=bundle.get('day')):
-            raise ValueError('快照数据完整性校验失败')
+        raw=(p/'bundle.json').read_bytes();bundle=json.loads(raw)
+        if bundle.get('format')=='vue-json':
+            if ((p/'COMMITTED').read_text()!=hashlib.sha256(raw).hexdigest()
+                    or bundle.get('id')!=identifier or digest(bundle.get('report'))!=bundle.get('payloadSha256')):
+                raise ValueError('快照数据完整性校验失败')
+            frozen_context=bundle
+            integrity={'report':'verified-json-bundle','metadata':'verified-json-bundle'}
+        else:
+            # Existing immutable snapshots retain their original HTML checksum.
+            # It is parsed only for read compatibility, never served as a page.
+            html=self.frozen_page(identifier).decode('utf-8')
+            marker=re.search(r'const\s+D\s*=\s*',html)
+            if not marker:raise ValueError('快照报告缺少数据载荷')
+            frozen_report=json.JSONDecoder().raw_decode(html[marker.end():])[0]
+            context_marker=re.search(r'window\.L2_CONTEXT\s*=\s*',html)
+            if not context_marker:raise ValueError('快照缺少冻结上下文')
+            frozen_context=json.JSONDecoder().raw_decode(html[context_marker.end():])[0]
+            if (bundle.get('id')!=identifier or digest(bundle.get('report'))!=bundle.get('payloadSha256')
+                    or digest(frozen_report)!=digest(bundle.get('report'))
+                    or frozen_context.get('id')!=identifier or frozen_context.get('day')!=bundle.get('day')):
+                raise ValueError('快照数据完整性校验失败')
+            integrity={'report':'verified-against-frozen-html','metadata':'legacy-bundle-unverified'}
         return {'mode':'snapshot','day':bundle['day'],'id':identifier,'savedAt':bundle['savedAt'],
                 'researchOnly':True,'provenance':bundle['reportProvenance'],'report':bundle['report'],
-                'integrity':{'report':'verified-against-frozen-html','metadata':'legacy-bundle-unverified'},
+                'integrity':integrity,
                 'stateViews':frozen_context.get('stateViews',{}),
                 'stateWindow':frozen_context.get('stateWindow'),
                 'charts':frozen_context.get('charts',{}),

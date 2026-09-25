@@ -8,7 +8,7 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 import duckdb
 import pandas as pd
-from level2_detail_server import Service, calculate, source_identity, make_handler, add_detail_controls
+from level2_detail_server import Service, calculate, source_identity, make_handler
 
 
 class DetailTests(unittest.TestCase):
@@ -147,12 +147,6 @@ class DetailTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             service.pool.shutdown()
-
-    def test_ui_install_idempotent(self):
-        html = add_detail_controls('<html><body>report</body></html>')
-        self.assertEqual(add_detail_controls(html), html)
-        self.assertIn('点击计算', html)
-
 
 if __name__ == '__main__':
     unittest.main()
