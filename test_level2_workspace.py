@@ -180,6 +180,27 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(frozen['charts'].get('minute/000001.SZ'),None)
         self.assertEqual(frozen['continuousUI'],continuous_ui)
 
+    def test_snapshot_rejects_chart_when_local_source_changes(self):
+        source=self.base/'stock.csv'
+        source.write_text('original chart source')
+        receipt=self.w.record_chart({'day':'20260907','code':'000001.SZ','source':str(self.base),
+                                     'sourceFiles':[str(source)],'labels':['20260907'],'bars':[[1,2,3]]},'day')
+        source.write_text('changed chart source')
+        with self.assertRaisesRegex(ValueError,'图表来源已变化'):
+            self.w.save({'day':'20260907','data':copy.deepcopy(self.data),
+                         'charts':{'day/000001.SZ':receipt}})
+
+    def test_snapshot_rejects_modified_chart_receipt(self):
+        receipt=self.w.record_chart({'day':'20260907','code':'000001.SZ','source':str(self.base),
+                                     'labels':[],'bars':[[1,2,3]]},'day')
+        path=self.w.receipts/f'{receipt}.json'
+        payload=json.loads(path.read_text())
+        payload['result']['bars']=[[9,9,9]]
+        path.write_text(json.dumps(payload))
+        with self.assertRaisesRegex(ValueError,'图表凭据内容校验失败'):
+            self.w.save({'day':'20260907','data':copy.deepcopy(self.data),
+                         'charts':{'day/000001.SZ':receipt}})
+
     def test_continuous_controls_reject_invalid_ranges_and_unknown_fields(self):
         self.assertEqual(validate_continuous_ui({}),{})
         for ui in ({'advanced':{'amountMin':'2','amountMax':'1'}},

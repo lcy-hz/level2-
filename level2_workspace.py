@@ -31,6 +31,15 @@ def digest(value):
     return hashlib.sha256(encoded(value).encode()).hexdigest()
 
 
+def chart_sources(result,kind):
+    if kind=='minute':
+        return [fingerprint(result['source']),fingerprint(result['preCloseSource'])]
+    if kind=='day':
+        files=result.get('sourceFiles') or [Path(result['source'])/f'{day}_stk_factor_pro.csv' for day in result['labels']]
+        return [fingerprint(path) for path in files]
+    raise ValueError('图表类型无效')
+
+
 def validate_continuous_ui(value):
     """Freeze presentation controls, never accept them as computed market evidence."""
     if not isinstance(value,dict) or len(encoded(value))>5000:raise ValueError('连续筛选参数无效')
@@ -306,11 +315,7 @@ class Workspace:
     def record_chart(self,result,kind):
         receipt=uuid.uuid4().hex
         self.receipts.mkdir(exist_ok=True)
-        sources=[]
-        if kind=='minute':
-            sources=[fingerprint(result['source']),fingerprint(result['preCloseSource'])]
-        else:
-            sources=[fingerprint(Path(p)) for p in result['sourceFiles']] if result.get('sourceFiles') else [fingerprint(Path(result['source'])/f'{d}_stk_factor_pro.csv') for d in result['labels']]
+        sources=chart_sources(result,kind)
         value={'result':result,'kind':kind,'sources':sources,'dataSha256':digest(result)}
         (self.receipts/f'{receipt}.json').write_text(encoded(value))
         return receipt
@@ -362,6 +367,8 @@ class Workspace:
             if not isinstance(token,str) or not ID.fullmatch(token):raise ValueError('图表凭据无效')
             receipt=json.loads((self.receipts/f'{token}.json').read_text());r=receipt['result']
             if r['day']!=day or r['code'] not in service.cards or key!=receipt['kind']+'/'+r['code']:raise ValueError('快照图表日期或股票不一致')
+            if receipt.get('dataSha256')!=digest(r):raise ValueError('图表凭据内容校验失败，请重新悬浮读取')
+            if receipt.get('sources')!=chart_sources(r,receipt['kind']):raise ValueError('图表来源已变化，请重新悬浮读取')
             charts[key]=r;receipts[key]=receipt
         identifier=uuid.uuid4().hex;saved=datetime.now(timezone.utc).isoformat()
         states=self.state.frozen(request.get('states',{}),day)
