@@ -35,6 +35,12 @@ const matches = computed(() => filterCandidates(props.cards, { query: query.valu
 const visible = computed(() => matches.value.slice((page.value - 1) * 24, page.value * 24))
 const pages = computed(() => Math.max(1, Math.ceil(matches.value.length / 24)))
 const resetPage = () => { page.value = 1 }
+function openFromCard(event, card) {
+  // The card body is a pointer shortcut; nested K-line and detail buttons
+  // keep their own action, while the explicit detail button stays keyboardable.
+  if (event.target instanceof Element && event.target.closest('button, a, input, select, textarea')) return
+  selected.value = card
+}
 const finite = value => typeof value === 'number' && Number.isFinite(value)
 const money = value => !finite(value) ? '未知' : Math.abs(value) >= 1e8 ? `${(value / 1e8).toFixed(2)} 亿` : `${(value / 1e4).toFixed(1)} 万`
 const percent = value => !finite(value) ? '未知' : `${value > 0 ? '+' : ''}${value !== 0 && Math.abs(value) < .005 ? value.toExponential(2) : value.toFixed(2)}%`
@@ -68,13 +74,13 @@ watch(pages, count => { if (page.value > count) page.value = count })
     </div>
     <p class="footnote">{{ focusOnly ? `默认显示 ${matches.length.toLocaleString()} 只重点深查股；输入名称／代码或选择条件可筛选 ${cards.length.toLocaleString()} 只全库股票。` : `筛选结果 ${matches.length.toLocaleString()} / ${cards.length.toLocaleString()} 只。` }}{{ linkedView ? `连续指标采用已应用 ${linkedView.window} 交易日（${linkedView.dates[0]}—${linkedView.dates.at(-1)}）${!linkedView.applicable ? '；窗口内变化筛选与趋势排序暂停' : ''}` : frozen ? '此快照未保存当前连续窗口，连续筛选／排序暂停且不补读' : '连续指标须先应用同日报告的观察窗口；连续筛选／排序暂不生效' }}。报告记录顺序：新报告按代码固定排序，历史快照保持保存时的原顺序；未知排序值始终排最后，筛选与分页不改变原报告事实。</p>
     <div class="candidate-grid">
-      <article v-for="card in visible" :key="card.code" class="candidate-card">
+      <article v-for="card in visible" :key="card.code" class="candidate-card" @click="openFromCard($event, card)">
         <div class="candidate-tags"><span class="badge">{{ card.label }}</span><span class="price-direction" :class="priceDirection(card.returnSign).tone">{{ priceDirection(card.returnSign).text }}</span></div><strong>{{ card.name }} <KlineTrigger :code="card.code" :name="card.name" :day="day" :frozen="frozen" :snapshot-charts="snapshotCharts" @loaded="emit('chart-loaded', $event)" /></strong>
         <span>收盘 {{ card.close ?? '未知' }} · VWAP {{ card.vwap ?? '未知' }}</span>
         <span>涨跌 <b :class="tone(card.ret)">{{ percent(card.ret) }}</b> · 主动净额 <b :class="tone(card.net)">{{ money(card.net) }}</b></span>
         <span class="muted">十档 买 {{ card.bid?.toLocaleString() ?? '未知' }} / 卖 {{ card.ask?.toLocaleString() ?? '未知' }}</span>
         <template v-if="linkedView"><span>净额比 <b :class="tone(states.get(card.code)?.level)">{{ percent(states.get(card.code)?.level) }}</b> · 较前日 {{ pp(delta(states.get(card.code))) }}</span><span class="muted">同向 {{ streak(states.get(card.code)) }} · 连续改善 {{ improvement(states.get(card.code)) }} · 有效 {{ coverage(states.get(card.code)) }}</span></template>
-        <button type="button" class="card-detail" @click="selected = card">查看证据</button>
+        <button type="button" class="card-detail" @click.stop="selected = card">查看证据</button>
       </article>
     </div>
     <div class="pagination"><button :disabled="page <= 1" @click="page--">上一页</button><span>{{ page }} / {{ pages }}</span><button :disabled="page >= pages" @click="page++">下一页</button></div>

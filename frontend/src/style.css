@@ -21,3 +21,4 @@
 .advanced-filters{margin:12px 0;padding:12px}.advanced-filters .state-stock-filters{grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}.advanced-filters input,.advanced-filters select{border:1px solid #38536b;background:#11263a;color:#e8f2f9;border-radius:9px;padding:8px}.advanced-filters>button{border:1px solid #45627b;border-radius:8px;background:#142d42;color:#e7f0fa;padding:7px 11px}.advanced-filters .footnote{margin:10px 0}
 .candidate-tags{display:flex;align-items:center;flex-wrap:wrap;gap:8px;min-width:0}.candidate-card .candidate-tags .badge{max-width:100%}.candidate-card .price-direction{font-size:11px;font-weight:700;white-space:nowrap}.price-direction.neutral,.price-direction.unknown{color:#aabecd}
 @media(min-width:540px) and (max-width:620px){.candidate-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.candidate-card{cursor:pointer}
