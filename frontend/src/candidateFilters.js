@@ -21,6 +21,18 @@ export function futureCloseChange(value) {
   return `${value > 0 ? '+' : ''}${value !== 0 && Math.abs(value) < .005 ? value.toExponential(2) : value.toFixed(2)}%`
 }
 
+export function snapshotClock(value) {
+  if (!Number.isInteger(value) || value < 0) return '未知'
+  const digits = String(value).padStart(9, '0')
+  if (digits.length !== 9) return `格式待核验（原值 ${value}）`
+  const hour = Number(digits.slice(0, 2))
+  const minute = Number(digits.slice(2, 4))
+  const second = Number(digits.slice(4, 6))
+  if (hour > 23 || minute > 59 || second > 59) return `格式待核验（原值 ${value}）`
+  const millis = digits.slice(6)
+  return `${digits.slice(0, 2)}:${digits.slice(2, 4)}:${digits.slice(4, 6)}${millis === '000' ? '' : `.${millis}`}`
+}
+
 // Historical HTML snapshots used the visible label for "all" and a different
 // sort-direction key. Normalize only the UI state; keep the frozen bundle intact.
 export function normalizeCandidateFilters(saved = {}) {

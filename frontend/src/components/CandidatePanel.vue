@@ -1,6 +1,6 @@
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue'
-import { filterCandidates, futureCloseChange, priceDirection, stateNarrative, summarizeCandidatePools } from '../candidateFilters.js'
+import { filterCandidates, futureCloseChange, priceDirection, snapshotClock, stateNarrative, summarizeCandidatePools } from '../candidateFilters.js'
 import KlineTrigger from './KlineTrigger.vue'
 import DetailEvidence from './DetailEvidence.vue'
 
@@ -62,6 +62,7 @@ watch(selected, async card => {
 const finite = value => typeof value === 'number' && Number.isFinite(value)
 const money = value => !finite(value) ? '未知' : Math.abs(value) >= 1e8 ? `${(value / 1e8).toFixed(2)} 亿` : `${(value / 1e4).toFixed(1)} 万`
 const percent = value => !finite(value) ? '未知' : `${value > 0 ? '+' : ''}${value !== 0 && Math.abs(value) < .005 ? value.toExponential(2) : value.toFixed(2)}%`
+const coveragePct = value => !finite(value) ? '未知' : `${value.toFixed(2)}%`
 const pp = value => !finite(value) ? '未知' : `${value > 0 ? '+' : ''}${value !== 0 && Math.abs(value) < .005 ? value.toExponential(2) : value.toFixed(2)} pp`
 const tone = value => !finite(value) ? '' : value > 0 ? 'positive' : value < 0 ? 'negative' : ''
 const delta = stock => linkedView.value?.applicable ? stock?.viewDelta : stock?.delta
@@ -108,6 +109,9 @@ watch(pages, count => { if (page.value > count) page.value = count })
     <dialog v-if="selected" ref="detailDialog" class="dialog" :aria-label="selected.name + '证据详情'" @close="selected = null" @click="closeOnBackdrop">
         <button class="close" @click="closeDetail">关闭</button><span class="eyebrow">DAILY EVIDENCE</span><h2>{{ selected.name }} <KlineTrigger :code="selected.code" :name="selected.name" :day="day" :frozen="frozen" :snapshot-charts="snapshotCharts" @loaded="emit('chart-loaded', $event)" /></h2>
         <p>{{ selected.label }} · 涨跌 {{ percent(selected.ret) }} · 主动净额 {{ money(selected.net) }} · 净额比 {{ percent(selected.ratio) }}</p>
+        <p>报告收盘 {{ selected.close ?? '未知' }} · VWAP {{ selected.vwap ?? '未知' }} · 收盘证据快照时钟 {{ snapshotClock(selected.closeTime) }}<span v-if="Number.isInteger(selected.closeTime) && selected.closeTime > 150000000">（15:00 后记录，非可交易时点）</span></p>
+        <p>连续竞价末档 {{ snapshotClock(selected.bookTime) }} · 十档买 {{ selected.bid?.toLocaleString() ?? '未知' }} / 卖 {{ selected.ask?.toLocaleString() ?? '未知' }} · 五时段成交额覆盖全天 {{ coveragePct(selected.regularCoverage) }} · 量／额对账差 {{ percent(selected.vgap) }} / {{ percent(selected.agap) }}</p>
+        <p class="footnote">五时段之外可能含竞价或时钟异常记录；量／额对账差以快照累计值为分母。末档显示量不等于全天承接或可成交深度。</p>
         <p>方向状态：{{ selected.directionStatus ?? '未知' }}；未知方向金额：{{ money(selected.unknownAmount) }}；关联单身份：{{ selected.parentIdentityStatus ?? '未验证' }}。</p>
         <section v-if="linkedView" class="candidate-state-evidence" aria-label="连续状态证据"><p class="footnote">已应用 {{ linkedView.window }} 交易日（{{ linkedView.dates[0] }}—{{ linkedView.dates.at(-1) }}）{{ linkedView.applicable ? '' : '；较前日比较使用窗口外上一交易日有效数据，结构变化统计仍不适用' }}。</p><p>{{ stateNarrative(selected, selectedState, linkedView.applicable) }}</p><div class="table-scroll"><table class="candidate-state-table"><thead><tr><th>指标</th><th>当前水平</th><th>较前日变化</th><th>窗口趋势</th><th>持续性</th><th>质量</th></tr></thead><tbody><tr><th>主动净额比</th><td data-label="当前水平">{{ percent(selectedState?.level) }}</td><td data-label="较前日变化">{{ pp(delta(selectedState)) }}</td><td data-label="窗口趋势">加权 {{ percent(selectedState?.weighted) }} · 斜率 {{ linkedView.applicable ? pp(selectedState?.slope) + '/日' : '不适用' }}</td><td data-label="持续性">同向 {{ streak(selectedState) }} · 改善 {{ improvement(selectedState) }}</td><td data-label="质量">方向 {{ coverage(selectedState) }}</td></tr><tr><th>成交额</th><td data-label="当前水平">{{ money(selectedState?.amount) }}</td><td data-label="较前日变化">{{ percent(selectedState?.amountChange) }}</td><td data-label="窗口趋势">均值 {{ money(selectedState?.meanAmount) }}</td><td data-label="持续性">未定义</td><td data-label="质量">成交额 {{ selectedState ? `${selectedState.amountValid}/${selectedState.expected} 日` : '未计算' }}</td></tr><tr><th>价格</th><td data-label="当前水平">报告收盘 {{ selected.close ?? '未知' }}</td><td data-label="较前日变化">{{ percent(selected.ret) }}</td><td data-label="窗口趋势">区间 {{ percent(selectedState?.priceReturn) }}</td><td data-label="持续性">未定义</td><td data-label="质量">{{ selectedState?.priceReturn == null ? '复权价格覆盖不足' : '复权价格比值可用' }}</td></tr></tbody></table></div><details><summary>连续窗口逐日证据与反证</summary><p v-for="row in selectedState?.history || []" :key="row.day">{{ row.day }} · 成交额 {{ money(row.amount) }} · 净额比 {{ percent(row.ratio) }} · {{ row.reason || '方向记录可用' }}</p><p>当前连续指标仅为日级描述；十档末档与关联单身份不能单独证明盘中补单或被动吸筹。</p></details></section>
         <DetailEvidence :key="selected.code" :card="selected" :day="day" :frozen="frozen" @loaded="emit('detail-loaded', $event)" />

@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { filterCandidates, futureCloseChange, normalizeCandidateFilters, priceDirection, stateNarrative, summarizeCandidatePools } from '../src/candidateFilters.js'
+import { filterCandidates, futureCloseChange, normalizeCandidateFilters, priceDirection, snapshotClock, stateNarrative, summarizeCandidatePools } from '../src/candidateFilters.js'
 
 const rows = [
   { code: '000001.SZ', name: '甲', label: '主动', returnSign: 1, net: 10 },
@@ -20,6 +20,15 @@ test('historical future close change keeps missing, zero and tiny moves distinct
   assert.equal(futureCloseChange(0), '0.00%')
   assert.equal(futureCloseChange(0.0001), '+1.00e-4%')
   assert.equal(futureCloseChange(-1.25), '-1.25%')
+})
+
+test('snapshot clock preserves source time and marks invalid or absent values', () => {
+  assert.equal(snapshotClock(93000000), '09:30:00')
+  assert.equal(snapshotClock(153036000), '15:30:36')
+  assert.equal(snapshotClock(145657000), '14:56:57')
+  assert.equal(snapshotClock(145657123), '14:56:57.123')
+  assert.equal(snapshotClock(null), '未知')
+  assert.equal(snapshotClock(256099000), '格式待核验（原值 256099000）')
 })
 
 test('historical snapshot filter labels restore without changing the frozen bundle', () => {
