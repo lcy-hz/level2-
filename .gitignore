@@ -22,6 +22,8 @@
 !/level2_peers.py
 !/level2_events.py
 !/level2_validation.py
+!/level2_limitup_study.py
+!/level2_limitup_sources.example.json
 !/level2_state_view.py
 !/level2_state_view.js
 !/level2_patterns.py

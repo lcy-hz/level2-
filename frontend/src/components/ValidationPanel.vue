@@ -42,6 +42,18 @@ const chosenRule = computed(() => rows.value.some(row => row.rule === selectedRu
 const chosenSummary = computed(() => rows.value.find(row => row.rule === chosenRule.value))
 const dayBreakdown = computed(() => chosenSummary.value?.signalDayBreakdown)
 const sourceBreakdown = computed(() => sourceStrata(result.value, dayBreakdown.value))
+const limitStudy = computed(() => result.value?.limitUpStudy)
+const limitRows = computed(() => (limitStudy.value?.summary || []).filter(row =>
+  row.cohort === selectedCohort.value && row.horizon === selectedHorizon.value))
+const limitContrasts = computed(() => (limitStudy.value?.pairedContrasts || []).filter(row =>
+  row.cohort === selectedCohort.value && row.horizon === selectedHorizon.value))
+const limitCoverage = computed(() => {
+  const days = limitStudy.value?.coverage || []
+  return { requested: days.length, comparable: days.filter(row => row.studyStatus === 'COMPARABLE').length,
+    uRows: days.reduce((total, row) => total + (row.uRows || 0), 0),
+    matchedClose: days.reduce((total, row) => total + (row.matchedClose || 0), 0),
+    validDirection: days.reduce((total, row) => total + (row.validStockDirection || 0), 0) }
+})
 const leaveOneDayOutText = computed(() => {
   const audit = chosenSummary.value?.leaveOneDayOutExcess
   if (!audit) return '旧结果未保存逐日剔一敏感性；不读取今日数据补齐。'
@@ -144,7 +156,13 @@ async function loadDetail(code = null) {
     if (id === detailSequence) detailStatus.value = `逐股读取失败：${error.message}`
   } finally { if (id === detailSequence) detailBusy.value = false }
 }
-const point = value => Number.isFinite(value) ? `${value > 0 ? '+' : ''}${value.toFixed(2)} pp` : '未知'
+const point = value => Number.isFinite(value) ? formatPct(value).replace('%', ' pp') : '未知'
+const directionName = { IMPROVING: '改善', WEAKENING: '恶化' }
+const limitStatusName = { COMPARABLE: '可比较', MISSING_LIMIT_LIST: '涨停名单缺档', MISSING_FLOW: 'Level‑2 缺档',
+  SOURCE_NOT_COMPARABLE: '来源不可比', MARKET_UNAVAILABLE_OR_FLAT: '市场未知／持平',
+  NO_VALID_U_PRICE: 'U股复权价格不可用', NO_VALID_STOCK_DIRECTION: 'U股资金方向不可用', NO_ELIGIBLE_U: '无合格U股' }
+const sensitivityRange = audit => !audit ? '旧结果未保存' : audit.comparableDays < 2
+  ? `不足两日（${audit.comparableDays} 日）` : `${point(audit.minPct)} ～ ${point(audit.maxPct)}`
 const resultLabel = row => row.status === 'PENDING' ? '未到期' : row.status === 'MISSING_PRICE' ? '价格缺失' : formatPct(row.returnPct)
 const entryGateName = { PENDING: '次日未到', MISSING_BAR: '缺日线', MISSING_PRICE: '价缺失', INVALID_OHLC: '价关系异常', UNKNOWN_VOLUME: '量未知', NO_VOLUME: '零成交量', ONE_PRICE_SESSION: '单一价位', PRICE_REFERENCE_ONLY: '仅价格参考' }
 const entryCounts = row => row.entryGateCounts ? Object.entries(row.entryGateCounts).map(([key, count]) => `${entryGateName[key] || key} ${count}`).join(' · ') : '旧结果未保存'
@@ -179,6 +197,19 @@ onBeforeUnmount(() => { sequence++; detailSequence++; clearTimeout(timer) })
       <div class="validation-filters"><label>样本分段<select v-model="selectedCohort"><option v-for="(name, key) in cohortName" :key="key" :value="key">{{ name }}</option></select></label><label>后续交易日<select v-model.number="selectedHorizon"><option v-for="day in horizons" :key="day" :value="day">后 {{ day }} 日</option></select></label><span>{{ cohortName[selectedCohort] }} · 已观察 {{ counts.observed.toLocaleString() }} 条 · 未到期 {{ counts.pending.toLocaleString() }} 条 · 各类最多 {{ counts.days }} 个已观察事件日</span></div>
       <div v-if="rows.length" class="table-scroll"><table class="validation-table"><thead><tr><th>事件</th><th>触发数</th><th>已观察／未到期／缺价格</th><th>次日日线门槛</th><th>已观察／触发日</th><th>平均收益</th><th>收盘路径回撤中位</th><th>同日基准超额</th><th>按事件日等权超额</th><th>基准平均覆盖</th></tr></thead><tbody><tr v-for="row in rows" :key="row.rule"><td>{{ ruleName[row.rule] || row.rule }}</td><td>{{ row.events.toLocaleString() }}</td><td>{{ row.observed.toLocaleString() }} / {{ row.pending.toLocaleString() }} / {{ row.missingPrice.toLocaleString() }}</td><td>{{ entryCounts(row) }}</td><td>{{ row.signalDays }} / {{ row.triggerDays ?? '旧结果未知' }}</td><td>{{ formatPct(row.meanReturnPct) }}</td><td>{{ drawdownSummary(row) }}</td><td>{{ formatPct(row.meanExcessPct) }}</td><td>{{ formatPct(row.equalDayMeanExcessPct) }}</td><td>{{ row.benchmarkPoolMeanN == null ? '未知' : row.benchmarkPoolMeanN.toFixed(0) + ' 只' }}</td></tr></tbody></table></div>
       <p v-else class="footnote">此分段／期限没有已识别事件；不补零，也不推出无效结论。</p>
+      <section class="validation-limit-study" aria-label="涨停收盘股专项研究">
+        <h3>涨停收盘股 · 市场 × 个股资金变化</h3>
+        <p class="footnote">独立母样本：本地 <code>limit_list_d</code> 的 U，排除 ST 与非沪深A股；不按固定涨幅猜板。市场变化取相邻日共同有效股票的成交额加权主动净额比，并排除当日 U 股；个股变化取自身净额比差。正／负变化分四格，平值和未知单列。所有条件均为收盘后证据。</p>
+        <template v-if="limitStudy">
+          <p class="footnote">事件日 {{ limitCoverage.comparable }}/{{ limitCoverage.requested }} 可比较；源 U {{ limitCoverage.uRows }} 条（含未通过后续核验日）、同日收盘核对及复权价格有效 {{ limitCoverage.matchedClose }} 条、个股资金变化有效 {{ limitCoverage.validDirection }} 条；后两项仅统计实际执行核验的日期。文件／股票缺失不补零。涨停源 {{ limitStudy.sourceTiming?.present ?? '未知' }}/{{ limitStudy.sourceTiming?.requested ?? '未知' }} 文件存在，{{ limitStudy.sourceTiming?.modifiedAfterTradeDay ?? '未知' }} 日最后修改晚于交易日；严格 PIT 未验收。</p>
+          <div class="table-scroll"><table class="validation-table"><thead><tr><th>市场净额比变化</th><th>个股净额比变化</th><th>触发／已观察／缺价</th><th>可比较事件日</th><th>后续平均收益</th><th>相对同日U均值 · 按日等权</th><th>剔一日范围</th></tr></thead><tbody><tr v-for="row in limitRows" :key="row.marketDirection + row.stockDirection"><td>{{ directionName[row.marketDirection] }}</td><td>{{ directionName[row.stockDirection] }}</td><td>{{ row.events }} / {{ row.observed }} / {{ row.missingPrice }}</td><td>{{ row.comparableDays }}</td><td>{{ formatPct(row.meanReturnPct) }}</td><td>{{ point(row.equalDayMeanExcessPct) }}</td><td>{{ sensitivityRange(row.leaveOneDayOutExcess) }}</td></tr></tbody></table></div>
+          <p class="footnote">同日 U 均值只作价格基准；市场改善／恶化跨日比较混有时期效应。真正可直接配对的是同一事件日的个股改善组与恶化组：</p>
+          <div class="table-scroll"><table class="validation-table"><thead><tr><th>当日市场状态</th><th>两组均有后续价的日期</th><th>同日配对收益差 · 改善减恶化</th><th>剔一日范围</th></tr></thead><tbody><tr v-for="row in limitContrasts" :key="row.marketDirection"><td>{{ directionName[row.marketDirection] }}</td><td>{{ row.pairedDays }}</td><td>{{ point(row.equalDayMeanSpreadPct) }}</td><td>{{ sensitivityRange(row.leaveOneDayOutSpread) }}</td></tr></tbody></table></div>
+          <details class="validation-event validation-day-breakdown"><summary>涨停专项逐日覆盖 · {{ limitCoverage.requested }} 个事件日</summary><p class="footnote">“可比较”只代表文件、来源、市场变化、至少一只 U 股复权价格和可辨资金方向通过本层门槛；不代表可成交。市场共同样本排除当日 U 股；未运行的价格核对显示“未查”而非零。</p><div class="table-scroll"><table class="validation-table"><thead><tr><th>日期</th><th>状态</th><th>源 U／价格有效／资金有效</th><th>市场共同样本</th><th>市场变化</th><th>缺复权／收盘冲突</th></tr></thead><tbody><tr v-for="day in limitStudy.coverage" :key="day.day"><th scope="row">{{ day.day }}</th><td>{{ limitStatusName[day.studyStatus] || day.studyStatus }}</td><td>{{ day.uRows ?? '未知' }} / {{ day.matchedClose ?? '未查' }} / {{ day.validStockDirection ?? '未查' }}</td><td>{{ day.market?.commonStocks ?? '不可比' }}</td><td>{{ point(day.market?.deltaPP) }}</td><td>{{ day.missingAdjustedClose ?? '未查' }} / {{ day.mismatchedRawClose ?? '未查' }}</td></tr></tbody></table></div></details>
+          <p class="footnote">四格与配对差只说明历史分层；收盘后才能观察 U、资金和市场状态，不能解释为收盘买入收益、次日买点或因子显著性。</p>
+        </template>
+        <p v-else class="footnote">旧研究未保存涨停专项；不读取最新涨停名单补齐。重新计算可按当前口径生成。</p>
+      </section>
       <details v-if="rows.length" class="validation-event validation-day-breakdown">
         <summary>逐事件日核对 · {{ cohortName[selectedCohort] }}后 {{ selectedHorizon }} 日</summary>
         <p class="footnote">每行是一个触发日，同日多股不当作独立交易日；期限重叠也不是独立确认。只读保存的逐日摘要，不从最新数据补旧快照。</p>

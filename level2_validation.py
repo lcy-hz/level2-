@@ -303,10 +303,12 @@ def study_identity(start, end, asof, split, horizons=(1, 3, 5)):
     """Cheap source check for a saved research receipt; no raw Level-2 scan."""
     from level2_state import StateService, stamp, sha, BASE, CONFIG
     from level2_paths import PATHS, CONFIG as PATH_CONFIG
+    from level2_limitup_study import CONFIG as LIMIT_CONFIG, limit_path, limit_root
     cfg, _, flow_days, price_days = _local_plan(start, end, asof, split, horizons)
     state = StateService(SimpleNamespace(base=BASE, root=PATHS['level2']))
     try:
-        files = [cfg['trade_calendar'], CONFIG, PATH_CONFIG, Path(__file__), BASE/'level2_state.py', BASE/'level2_events.py']
+        files = [cfg['trade_calendar'], CONFIG, PATH_CONFIG, LIMIT_CONFIG,
+                 Path(__file__), BASE/'level2_state.py', BASE/'level2_events.py', BASE/'level2_limitup_study.py']
         missing = []
         for day in flow_days:
             source = state.source(day)
@@ -316,6 +318,8 @@ def study_identity(start, end, asof, split, horizons=(1, 3, 5)):
             else:
                 missing.append([day, 'missing_deal'])
         files.extend(PATHS['stk_factor_pro']/f'{day}_stk_factor_pro.csv' for day in price_days)
+        limit_list_root = limit_root()
+        files.extend(limit_path(limit_list_root, day) for day in flow_days[1:])
         return sha([stamp(path) for path in files] + missing)
     finally:
         state.pool.shutdown(wait=False)
@@ -326,6 +330,7 @@ def local_study(start, end, asof, split, horizons=(1, 3, 5),
     """Read source-gated daily aggregates; never mix cached facts from changed files."""
     from level2_state import StateService, BASE
     from level2_paths import PATHS
+    from level2_limitup_study import limit_root, limitup_study, read_limitups
     _, days, flow_days, price_days = _local_plan(start, end, asof, split, horizons)
     state = StateService(SimpleNamespace(base=BASE, root=PATHS['level2']))
 
@@ -340,9 +345,18 @@ def local_study(start, end, asof, split, horizons=(1, 3, 5),
         prices,bars={},{}
         for day in price_days:
             prices[day],bars[day]=state.price_bars(day)
+        root = limit_root()
+        limitups = {day: read_limitups(root, day) for day in flow_days[1:]}
         result = study(flows, prices, days, start, end, asof, split, horizons,
                        collect_observations=collect_observations, on_observation=on_observation,
                        bars=bars, flow_sources={item['day']: item['status'] for item in sources})
+        result['limitUpStudy'] = limitup_study(flows, {item['day']: item['status'] for item in sources},
+                                              limitups, prices, bars, days, start, end, asof, split, horizons)
+        limit_timing = [file_timing(day, audit['source']) for day, (audit, _) in limitups.items()]
+        result['limitUpStudy']['sourceTiming'] = {
+            'requested': len(limit_timing), 'present': sum(row['present'] for row in limit_timing),
+            'modifiedAfterTradeDay': sum(row['modifiedAfterTradeDay'] is True for row in limit_timing),
+            'days': limit_timing}
         timing_audit = input_timing_audit(sources, price_days, PATHS['stk_factor_pro'])
         if before != study_identity(start, end, asof, split, horizons):
             raise ValueError('研究期间输入来源变化，结果未发布')
