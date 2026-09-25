@@ -65,6 +65,7 @@ class DetailTests(unittest.TestCase):
         self.assertIsNotNone(result['quotePath']['segments'][0]['medianMicropricePremiumBps'])
         self.assertIsNotNone(result['quotePath']['segments'][0]['medianWeightedTenImbalancePct'])
         self.assertEqual(result['tradePrintDrawdown']['status'], 'MISSING_SEQUENCE')
+        self.assertEqual(result['priceResponse']['status'], 'NO_COMPARABLE_PAIRS')
         self.assertEqual([item['status'] for item in result['orderLinkAudit']], ['MISSING_FIELD', 'MISSING_FIELD'])
         self.assertIsNone(result['orderLinkAudit'][0]['matchedTrades'])
 

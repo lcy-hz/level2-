@@ -11,6 +11,7 @@
 !/level2_minute_state.py
 !/level2_quote_path.py
 !/level2_trade_path.py
+!/level2_price_response.py
 !/test_level2_quote_path.py
 !/level2_kline.py
 !/level2_paths.py

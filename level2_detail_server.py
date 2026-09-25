@@ -15,6 +15,7 @@ import duckdb
 from level2_contract import native_ticks,KNOWN_NET,UNKNOWN_AMOUNT,COMPLETE_NET,parent_query
 from level2_quote_path import quote_path
 from level2_trade_path import trade_print_drawdown
+from level2_price_response import price_response
 
 BASE = Path(__file__).resolve().parent
 LEGACY_BOOKMARK = 'level2-market-scan_20260922.html'
@@ -48,6 +49,7 @@ def source_identity(day, root=SOURCE):
     identity.append(('contract',hashlib.sha256((BASE/'level2_contract.py').read_bytes()).hexdigest()))
     identity.append(('quote_path',hashlib.sha256((BASE/'level2_quote_path.py').read_bytes()).hexdigest()))
     identity.append(('trade_path',hashlib.sha256((BASE/'level2_trade_path.py').read_bytes()).hexdigest()))
+    identity.append(('price_response',hashlib.sha256((BASE/'level2_price_response.py').read_bytes()).hexdigest()))
     return hashlib.sha256(json.dumps(identity).encode()).hexdigest()
 
 
@@ -170,6 +172,8 @@ def calculate(code, day, expected, progress, root=SOURCE):
             [str(root / f'snapshot_{day}.parquet'), code]).fetchall()
         quotes = quote_path(snapshots, day)
         quotes['source'] = str(root / f'snapshot_{day}.parquet')
+        progress('正在比较成交方向与相邻盘口中间价变化…')
+        response = price_response(con.execute('SELECT t,price,qty,side FROM ticks').fetchall(), snapshots, day)
         if before != source_identity(day, root):
             raise ValueError('计算期间源文件发生变化，请重新计算')
         return {'code': code, 'day': day, 'sourceIdentity': before,
@@ -177,6 +181,7 @@ def calculate(code, day, expected, progress, root=SOURCE):
                 'segments': segments, 'parents': parents, 'orders': orders,
                 'orderLinkAudit': order_link,
                 'quotePath': quotes, 'tradePrintDrawdown': trade_path,
+                'priceResponse': response,
                 'regularCoverage': round(sum(r[1] for r in con.execute('''SELECT 1,SUM(price*qty) FROM ticks
                    WHERE (t BETWEEN 93000000 AND 113000000) OR (t BETWEEN 130000000 AND 150000000)''').fetchall() if r[1] is not None) / amount * 100, 2),
                 'tradeRows': count, 'amount': round(amount), 'net': round(net) if net is not None else None,
