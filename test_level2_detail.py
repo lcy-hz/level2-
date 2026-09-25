@@ -30,9 +30,9 @@ class DetailTests(unittest.TestCase):
         orders = pd.DataFrame([['600000.SH', self.day, '0', 'B', '120']],
                               columns=['万得代码', '自然日', '委托类型', '委托代码', '委托数量'])
         snapshots = pd.DataFrame([
-            ['600000.SH', self.day, '93000000', '99000', '101000'],
-            ['600000.SH', self.day, '95957000', '100000', '102000'],
-        ], columns=['万得代码', '自然日', '时间', '申买价1', '申卖价1'])
+            ['600000.SH', self.day, '93000000', '99000', '101000', '100', '200'],
+            ['600000.SH', self.day, '95957000', '100000', '102000', '200', '100'],
+        ], columns=['万得代码', '自然日', '时间', '申买价1', '申卖价1', '申买量1', '申卖量1'])
         con.register('trades_fixture', trades)
         con.register('orders_fixture', orders)
         con.register('snapshots_fixture', snapshots)
@@ -54,6 +54,7 @@ class DetailTests(unittest.TestCase):
         self.assertEqual(result['orders'][0]['r'], 1)
         self.assertEqual(result['quotePath']['status'],'AVAILABLE')
         self.assertAlmostEqual(result['quotePath']['segments'][0]['midChangePct'],1)
+        self.assertEqual(result['quotePath']['segments'][0]['depthValid'],2)
 
     def test_unknown_direction_is_not_zero(self):
         con=duckdb.connect();path=self.root/f'deal_{self.day}.parquet'

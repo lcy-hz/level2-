@@ -88,7 +88,7 @@ def calculate(code, day, expected, progress, root=SOURCE):
             raise ValueError('order_raw 为空或日期/数量异常，未发布不完整结果')
         orders = [{'t': t, 's': s, 'r': r, 'q': round(q)} for t, s, r, q, _, _ in rows]
         progress('正在核对该股盘口快照的买卖一档中间价路径…')
-        snapshots = con.execute('''SELECT "自然日","时间","申买价1","申卖价1"
+        snapshots = con.execute('''SELECT "自然日","时间","申买价1","申卖价1","申买量1","申卖量1"
             FROM read_parquet(?) WHERE "万得代码"=?''',
             [str(root / f'snapshot_{day}.parquet'), code]).fetchall()
         quotes = quote_path(snapshots, day)
