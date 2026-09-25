@@ -65,6 +65,62 @@ def microprice_premium_bp(bid, ask, bid_qty, ask_qty):
     return 10000 * (ask - bid) * (bid_qty - ask_qty) / ((ask + bid) * (bid_qty + ask_qty))
 
 
+def clock_millis(value):
+    """Native HHMMSSmmm (leading zero optional) to milliseconds since midnight."""
+    if value is None or value < 0 or value > 235959999:
+        return None
+    digits = f'{value:09d}'
+    hour, minute, second = int(digits[:2]), int(digits[2:4]), int(digits[4:6])
+    if hour >= 24 or minute >= 60 or second >= 60:
+        return None
+    return ((hour * 60 + minute) * 60 + second) * 1000 + int(digits[6:])
+
+
+def displayed_recovery(path):
+    """First observed return to pre-drop size at an unchanged best quote.
+
+    Invalid depth, a price change, or the segment boundary censors an active
+    episode.  This does not identify orders, replenishment, or actual latency.
+    """
+    result = {'status': 'NO_COMPARABLE', 'samePricePairs': 0, 'declines': 0,
+              'recovered': 0, 'censored': 0, 'medianObservedSeconds': None}
+    previous = active = None
+    durations = []
+    for time, price, quantity in path:
+        moment = clock_millis(time)
+        if moment is None:
+            return {**result, 'status': 'INVALID_CLOCK', 'samePricePairs': None,
+                    'declines': None, 'recovered': None, 'censored': None,
+                    'medianObservedSeconds': None}
+        if (price is None or quantity is None or not math.isfinite(price) or
+                not math.isfinite(quantity) or price <= 0 or quantity <= 0):
+            if active is not None:
+                result['censored'] += 1
+            previous = active = None
+            continue
+        if previous is None or price != previous[1]:
+            if active is not None:
+                result['censored'] += 1
+            previous, active = (moment, price, quantity), None
+            continue
+        result['samePricePairs'] += 1
+        if active is not None and quantity >= active[0]:
+            result['recovered'] += 1
+            durations.append((moment - active[1]) / 1000)
+            active = None
+        elif active is None and quantity < previous[2]:
+            result['declines'] += 1
+            active = (previous[2], moment)
+        previous = (moment, price, quantity)
+    if active is not None:
+        result['censored'] += 1
+    if result['samePricePairs']:
+        result['status'] = 'OBSERVED'
+    if durations:
+        result['medianObservedSeconds'] = median(durations)
+    return result
+
+
 def quote_path(rows, day):
     """rows: day/time/bid1/ask1/qty1 pair[/9 more levels]; prices scaled by 10000."""
     observed = []
@@ -99,11 +155,13 @@ def quote_path(rows, day):
         same_bid_count = 0
         bid_rise_count = 0
         previous_depth = None
+        bid_path, ask_path = [], []
         for time, bid, ask, bid_qty, ask_qty, ten_metrics in sorted(segment, key=lambda item: item[0]):
             try:
                 b, a = float(bid), float(ask)
             except (TypeError, ValueError):
                 previous_depth = None
+                bid_path.append((time, None, None)); ask_path.append((time, None, None))
                 continue
             if math.isfinite(b) and math.isfinite(a) and b > 0 and a >= b:
                 valid.append((time, (b + a) / 20000))
@@ -112,11 +170,14 @@ def quote_path(rows, day):
                     buy_qty, sell_qty = float(bid_qty), float(ask_qty)
                 except (TypeError, ValueError):
                     previous_depth = None
+                    bid_path.append((time, None, None)); ask_path.append((time, None, None))
                     continue
                 if (not math.isfinite(buy_qty) or not math.isfinite(sell_qty) or
                         buy_qty < 0 or sell_qty < 0 or buy_qty + sell_qty <= 0):
                     previous_depth = None
+                    bid_path.append((time, None, None)); ask_path.append((time, None, None))
                     continue
+                bid_path.append((time, b, buy_qty)); ask_path.append((time, a, sell_qty))
                 imbalances.append(100 * (buy_qty - sell_qty) / (buy_qty + sell_qty))
                 microprice_premiums.append(microprice_premium_bp(b, a, buy_qty, sell_qty))
                 if ten_metrics is not None:
@@ -128,6 +189,7 @@ def quote_path(rows, day):
                 previous_depth = (b, buy_qty)
             else:
                 previous_depth = None
+                bid_path.append((time, None, None)); ask_path.append((time, None, None))
         valid.sort(key=lambda item: item[0])
         row = {'s': label, 'observed': len(segment), 'valid': len(valid),
                'firstTime': valid[0][0] if valid else None,
@@ -143,7 +205,9 @@ def quote_path(rows, day):
                'medianMicropricePremiumBps': median(microprice_premiums) if microprice_premiums else None,
                'tenLevelValid': len(ten_imbalances),
                'sameBidComparable': same_bid_count,
-               'sameBidDisplayedRise': bid_rise_count}
+               'sameBidDisplayedRise': bid_rise_count,
+               'bidDisplayedRecovery': displayed_recovery(bid_path),
+               'askDisplayedRecovery': displayed_recovery(ask_path)}
         if len(valid) >= 2:
             minimum = min(value for _, value in valid)
             row.update(midChangePct=100 * (valid[-1][1] / valid[0][1] - 1),
@@ -151,4 +215,4 @@ def quote_path(rows, day):
         segments.append(row)
     return {'status': 'AVAILABLE' if any(item['midChangePct'] is not None for item in segments) else 'NO_COMPARABLE_QUOTES',
             'segments': segments, 'badDateRows': 0,
-            'method': '仅连续竞价有效买卖档快照；微价格相对中间价偏离按买卖一档价量交叉加权，单位 bp。十档距离权重为1/(1+离最优价距离/尺度)，尺度为买一卖一价差，锁定盘口时取最近档位价差；均为显示量描述，不代表可成交深度。买一同价显示量上升只比较相邻有效快照，不解码新增或撤单，不重建队列，也不归因于主动成交'}
+            'method': '仅连续竞价有效买卖档快照；微价格相对中间价偏离按买卖一档价量交叉加权，单位 bp。十档距离权重为1/(1+离最优价距离/尺度)，尺度为买一卖一价差，锁定盘口时取最近档位价差。同价显示量恢复从首次观测下降到首次恢复至下降前数量，价格变化、缺量和时段结束均作删失；不是补单或实际恢复时延。不解码新增或撤单，不重建队列，也不归因于主动成交'}

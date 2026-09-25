@@ -1,7 +1,7 @@
 import unittest
 from statistics import median
 
-from level2_quote_path import quote_path, ten_level_imbalance, ten_level_metrics, microprice_premium_bp
+from level2_quote_path import quote_path, ten_level_imbalance, ten_level_metrics, microprice_premium_bp, displayed_recovery
 
 
 class QuotePathTests(unittest.TestCase):
@@ -44,6 +44,9 @@ class QuotePathTests(unittest.TestCase):
             microprice_premium_bp(10000,10100,150,100),
             microprice_premium_bp(9900,10000,300,100),
             microprice_premium_bp(9900,10000,200,100)]))
+        self.assertEqual(result['bidDisplayedRecovery']['declines'], 1)
+        self.assertEqual(result['bidDisplayedRecovery']['censored'], 1)
+        self.assertEqual(result['askDisplayedRecovery']['declines'], 1)
 
     def test_missing_depth_breaks_same_price_comparison(self):
         rows=[('20260922','93000000','10000','10100','100','100'),
@@ -90,6 +93,34 @@ class QuotePathTests(unittest.TestCase):
         self.assertAlmostEqual(microprice_premium_bp(10000,10000,100,10),0)
         broken = list(row); broken[24] = '-1'
         self.assertIsNone(ten_level_metrics(broken))
+
+    def test_same_quote_displayed_recovery_and_censoring(self):
+        path = [(93000000,10000,100),(93002000,10000,50),
+                (93004000,10000,100),(93006000,10000,80),
+                (93008000,9900,200)]
+        result = displayed_recovery(path)
+        self.assertEqual(result['status'], 'OBSERVED')
+        self.assertEqual((result['samePricePairs'],result['declines'],result['recovered'],result['censored']),
+                         (3,2,1,1))
+        self.assertEqual(result['medianObservedSeconds'],2)
+        interrupted = displayed_recovery([(93000000,10000,100),(93002000,10000,50),
+                                          (93003000,None,None),(93004000,10000,120)])
+        self.assertEqual((interrupted['recovered'],interrupted['censored']),(0,1))
+        self.assertIsNone(interrupted['medianObservedSeconds'])
+        zero_depth = displayed_recovery([(93000000,10000,100),(93002000,10000,50),
+                                         (93003000,10000,0),(93004000,10000,100)])
+        self.assertEqual((zero_depth['recovered'],zero_depth['censored']),(0,1))
+        no_decline = displayed_recovery([(93000000,10000,100),(93002000,10000,120)])
+        self.assertEqual((no_decline['status'],no_decline['declines']),('OBSERVED',0))
+        nested = displayed_recovery([(93000000,10000,100),(93001000,10000,80),
+                                     (93002000,10000,60),(93005000,10000,100)])
+        self.assertEqual((nested['declines'],nested['recovered'],nested['medianObservedSeconds']),
+                         (1,1,4))
+        at_end = displayed_recovery([(93000000,10000,100),(93002000,10000,50)])
+        self.assertEqual((at_end['declines'],at_end['censored'],at_end['medianObservedSeconds']),
+                         (1,1,None))
+        self.assertEqual(displayed_recovery([(93000000,10000,100)])['status'],'NO_COMPARABLE')
+        self.assertEqual(displayed_recovery([(93000000,10000,100),(93099000,10000,80)])['status'],'INVALID_CLOCK')
 
     def test_duplicate_regular_time_or_bad_date_disables_path(self):
         rows=[('20260922','93000000','10000','10100'),

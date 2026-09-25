@@ -100,7 +100,10 @@ class WorkspaceTests(unittest.TestCase):
                 'parents':[{'b':'<5万','n':30,'c':2}], 'orders':[{'t':'0','s':'B','r':1,'q':100}],
                 'quotePath':{'status':'AVAILABLE','source':'/test/snapshot.parquet',
                              'segments':[{'s':'09:30–10:00','midChangePct':.5,'valid':20,'observed':20,
-                                          'medianMicropricePremiumBps':.3,'medianWeightedTenImbalancePct':-8}]},
+                                          'medianMicropricePremiumBps':.3,'medianWeightedTenImbalancePct':-8,
+                                          'bidDisplayedRecovery':{'status':'OBSERVED','samePricePairs':10,
+                                                                  'declines':2,'recovered':1,'censored':1,
+                                                                  'medianObservedSeconds':3}}]},
                 'tradePrintDrawdown':{'status':'OBSERVED','valuePct':-1.5,
                                       'peakTime':'09:42:00.000','troughTime':'14:34:00.000',
                                       'printCount':42,'ordering':'成交编号升序；时间非降'},
@@ -115,6 +118,7 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(frozen['tradeRows'],42)
         self.assertEqual(frozen['quotePath']['segments'][0]['midChangePct'],.5)
         self.assertEqual(frozen['quotePath']['segments'][0]['medianWeightedTenImbalancePct'],-8)
+        self.assertEqual(frozen['quotePath']['segments'][0]['bidDisplayedRecovery']['recovered'],1)
         self.assertEqual(frozen['tradePrintDrawdown']['valuePct'],-1.5)
         forged=copy.deepcopy(data);forged['cards'][0]['detailEvidence']['tradeRows']=999
         with self.assertRaisesRegex(ValueError,'完整深查证据'):
