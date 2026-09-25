@@ -28,11 +28,13 @@ class ContractTests(unittest.TestCase):
               ['000001.SZ','20260921','93000000','4','100000','999','B','3','4'],
             ],columns=['万得代码','自然日','时间','成交编号','成交价格','成交数量','BS标志','叫买序号','叫卖序号'])
             c.register('df',df);c.execute('COPY df TO ? (FORMAT PARQUET)',[str(root/f'deal_{day}.parquet')])
-            sn=pd.DataFrame([['000002.SZ',day,'153000000'],
-                             ['000002.SZ',day,'93000000'],
-                             ['000002.SZ',day,'93000000'],
-                             ['000002.SZ',day,'96000000'],
-                             ['000002.SZ',day,'96000000']],columns=['万得代码','自然日','时间'])
+            sn=pd.DataFrame([['000002.SZ',day,'153000000','10'],
+                             ['000002.SZ',day,'93000000','11'],
+                             ['000002.SZ',day,'93000000','12'],
+                             ['000002.SZ',day,'93100000','13'],
+                             ['000002.SZ',day,'93030000','14'],
+                             ['000002.SZ',day,'96000000','0'],
+                             ['000002.SZ',day,'96000000','0']],columns=['万得代码','自然日','时间','成交价'])
             c.register('sn',sn);c.execute('COPY sn TO ? (FORMAT PARQUET)',[str(root/f'snapshot_{day}.parquet')])
             od=pd.DataFrame([['000001.SZ',day,'0','0','9','B'],['000001.SZ',day,'93000000','0','9','S']],
                 columns=['万得代码','自然日','时间','委托编号','交易所委托号','委托代码'])
@@ -49,7 +51,12 @@ class ContractTests(unittest.TestCase):
             self.assertEqual(q['tables']['snapshot']['afterClose'],1)
             self.assertEqual(q['tables']['snapshot']['invalidClock'],2)
             self.assertEqual(q['snapshotTimestampDuplicates'],
-                             {'eligibleRows':2,'groups':1,'affectedStocks':1,'affectedRows':2,'excessRows':1})
+                             {'eligibleRows':4,'groups':1,'affectedStocks':1,'affectedRows':2,'excessRows':1})
+            self.assertEqual(q['snapshotExactDuplicates'],
+                             {'eligibleRows':7,'candidateKeyGroups':2,'candidateRows':4,
+                              'groups':1,'affectedRows':2,'excessRows':1})
+            self.assertEqual(q['snapshotPhysicalTimeRegressions'],
+                             {'eligibleRows':4,'comparablePairs':3,'regressions':1,'affectedStocks':1})
             self.assertEqual(q['coverage']['intersection'],0)
             self.assertEqual(q['candidateDuplicateKey']['groups'],1)
             self.assertIn('数据质量',render_quality(q));c.close()

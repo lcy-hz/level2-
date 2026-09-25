@@ -66,6 +66,38 @@ def inspect_day(con, root, day, progress=print):
       COALESCE(SUM(n) FILTER(WHERE n>1),0),
       COALESCE(SUM(n-1) FILTER(WHERE n>1),0) FROM g''',
       [str(root/f'snapshot_{day}.parquet'),day]).fetchone()
+    progress('quality '+day+' snapshot exact row duplicates')
+    snapshot_path=str(root/f'snapshot_{day}.parquet')
+    exact_snapshot=con.execute(f'''WITH candidate_keys AS (
+      SELECT "万得代码" code,"自然日" d,"时间" t,COUNT(*) n
+      FROM read_parquet(?) WHERE regexp_matches("万得代码",'{PAT}')
+      GROUP BY 1,2,3 HAVING COUNT(*)>1
+    ), candidate_rows AS (
+      SELECT p.* FROM read_parquet(?) p JOIN candidate_keys k
+      ON p."万得代码" IS NOT DISTINCT FROM k.code
+      AND p."自然日" IS NOT DISTINCT FROM k.d
+      AND p."时间" IS NOT DISTINCT FROM k.t
+    ), exact_groups AS (
+      SELECT *,COUNT(*) n FROM candidate_rows GROUP BY ALL HAVING COUNT(*)>1
+    ) SELECT (SELECT COUNT(*) FROM candidate_keys),
+      (SELECT COALESCE(SUM(n),0) FROM candidate_keys),
+      (SELECT COUNT(*) FROM exact_groups),
+      (SELECT COALESCE(SUM(n),0) FROM exact_groups),
+      (SELECT COALESCE(SUM(n-1),0) FROM exact_groups)''',
+      [snapshot_path,snapshot_path]).fetchone()
+    progress('quality '+day+' snapshot physical row time regression')
+    physical_snapshot=con.execute(f'''WITH x AS (
+      SELECT "万得代码" code,TRY_CAST("时间" AS BIGINT) t,file_row_number r
+      FROM read_parquet(?,file_row_number=true)
+      WHERE regexp_matches("万得代码",'{PAT}') AND "自然日"=?
+    ), valid AS (
+      SELECT * FROM x WHERE (t//100000)%100<60 AND (t//1000)%100<60
+      AND ((t BETWEEN 93000000 AND 113000000) OR (t BETWEEN 130000000 AND 150000000))
+    ), w AS (
+      SELECT code,t,LAG(t) OVER (PARTITION BY code ORDER BY r) prev FROM valid
+    ) SELECT COUNT(*),COUNT(*) FILTER(WHERE prev IS NOT NULL),
+      COUNT(*) FILTER(WHERE t<prev),COUNT(DISTINCT code) FILTER(WHERE t<prev) FROM w''',
+      [snapshot_path,day]).fetchone()
     progress('quality '+day+' order linkage')
     # Inspect both native candidate key fields, never select one merely for best fit.
     linkage={}
@@ -95,11 +127,15 @@ def inspect_day(con, root, day, progress=print):
       'candidateDuplicateKey':{'groups':dup[0],'affectedRows':dup[1],'excessRows':dup[2],
           'rate':dup[1]/profiles['deal']['rows'] if profiles['deal']['rows'] else None},
       'snapshotTimestampDuplicates':dict(zip(['eligibleRows','groups','affectedStocks','affectedRows','excessRows'],snapshot_dups)),
+      'snapshotExactDuplicates':{'eligibleRows':profiles['snapshot']['rows'],
+          **dict(zip(['candidateKeyGroups','candidateRows','groups','affectedRows','excessRows'],exact_snapshot))},
+      'snapshotPhysicalTimeRegressions':dict(zip(['eligibleRows','comparablePairs','regressions','affectedStocks'],physical_snapshot)),
       'linkage':linkage,'limits':['成交候选键为股票/日期/成交编号；无频道，不将候选键重复直接判定为重复成交，不自动去重。',
           '连续竞价同股同时间快照重复单列：时间精度及物理写入顺序不能证明独立盘口事件；涉及股票的按需盘口路径拒绝任意选样。',
+          '快照完全重复按全部原始字段逐项分组；物理行时间回退只描述Parquet文件排列，不能证明交易所原始事件顺序。',
           '两种委托键仅做匹配审计，匹配不证明经济订单身份；重复键可能含撤单等多事件，不自动认定错误。',
           '零时钟、盘后记录单列：可能是状态或延迟发布，不直接称为非法交易。',
-          '未完成逐字段完全重复行、时间乱序、订单事件语义与盘口重建验证；不是完整性认证。']}
+          '逐笔成交与原始委托的全字段重复、三表源事件顺序、订单事件语义与盘口重建仍未完成；不是完整性认证。']}
 
 def render_quality(q):
     from html import escape
@@ -117,6 +153,9 @@ def render_quality(q):
     html+=f"<p>成交候选键重复：{du['groups']:,}组，涉及{du['affectedRows']:,}行；有效已识别方向成交中无效关联编号：{d['invalidLinkedKeyTrades']:,}条。无效编号不会拼成大单。</p>"
     snapshot_dups=q.get('snapshotTimestampDuplicates')
     html+=('<p>连续竞价同股同时间快照：'+(f"{snapshot_dups['groups']:,} 组，涉及 {snapshot_dups['affectedStocks']:,} 只、{snapshot_dups['affectedRows']:,} 行；分母 {snapshot_dups['eligibleRows']:,} 行。" if snapshot_dups else '未核验。')+'重复不自动去重；盘口路径遇重复时间不任意选样。</p>')
+    exact=q.get('snapshotExactDuplicates');physical=q.get('snapshotPhysicalTimeRegressions')
+    html+=('<p>快照全字段完全重复：'+(f"{exact['groups']:,} 组、{exact['affectedRows']:,} 行；先在 {exact['eligibleRows']:,} 行中识别 {exact['candidateKeyGroups']:,} 组同股同日期同时间候选，再逐字段精确比较。" if exact else '未核验。')+'成交与原始委托未覆盖。</p>')
+    html+=('<p>快照 Parquet 物理行时钟回退：'+(f"{physical['regressions']:,}/{physical['comparablePairs']:,} 对，涉及 {physical['affectedStocks']:,} 只。" if physical else '未核验。')+'这不证明交易所源事件顺序。</p>')
     html+='<h3>候选委托字段匹配，不代表已确认订单身份</h3><div class="scroll"><table><thead><tr><th>候选字段</th><th>有效编号成交</th><th>匹配成交</th><th>重复键涉及成交</th><th>多方向键涉及成交</th></tr></thead><tbody>'
     for k,v in q['linkage'].items():
         html+='<tr>'+''.join('<td>'+f(x)+'</td>' for x in [k,v['eligibleTrades'],v['matchedTrades'],v['repeatedKeyTrades'],v['multiSideKeyTrades']])+'</tr>'
