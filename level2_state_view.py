@@ -58,11 +58,21 @@ def market_state(trajectory,window,common):
             'ratioImprovement':improvement(ratios)}
 
 
+def price_state(trajectory,window,common):
+    status='INCOMPLETE_WINDOW' if len(trajectory)!=window else 'NO_COMMON_PRICE_COHORT' if not common else 'AVAILABLE'
+    shares=[row['priceUpShare'] for row in trajectory]
+    return {'status':status,'latestUpShare':shares[-1] if status=='AVAILABLE' else None,
+            'upShareDeltaPP':shares[-1]-shares[-2] if status=='AVAILABLE' and len(shares)>1 else None,
+            'upShareSlopePPPerDay':slope(shares) if status=='AVAILABLE' else None}
+
+
 def derive(result):
     entries=list(result.get('states',{}).items())
     dates=sorted({row['day'] for _,state in entries for row in state.get('history',[])})
     rows=[(code,state,{row['day']:row for row in state.get('history',[])}) for code,state in entries]
     common=[item for item in rows if len(dates)==result['window'] and all(usable(item[2].get(day)) for day in dates)]
+    price_common=[item for item in rows if len(dates)==result['window'] and
+                  all(finite(item[2].get(day,{}).get('priceDailyReturn')) for day in dates)]
     sources={source['day']:source for source in result.get('sources',[]) if isinstance(source,dict) and 'day' in source}
     trajectory=[]
     for day in dates:
@@ -70,16 +80,25 @@ def derive(result):
         flow=[row[day] for _,_,row in common]
         denominator=sum(row['amount'] for row in flow)
         numerator=sum(row['net'] for row in flow)
+        price_values=[row[day]['priceDailyReturn'] for _,_,row in price_common]
+        price_coverage=sum(finite(row.get(day,{}).get('priceDailyReturn')) for _,_,row in rows)
         trajectory.append({'day':day,'amount':sum(amounts) if amounts else None,'amountCoverage':len(amounts),
                            'directionCoverage':sum(usable(row.get(day)) for _,_,row in rows),
                            'commonAmount':denominator if flow else None,'commonNet':numerator if flow else None,
                            'ratio':100*numerator/denominator if denominator else None,
                            'buyShare':100*sum(row['ratio']>0 for row in flow)/len(flow) if flow else None,
-                           'sourceStatus':sources.get(day,{}).get('status'),'sourceFile':sources.get(day,{}).get('source')})
+                           'priceCoverage':price_coverage,
+                           'priceUpShare':100*sum(value>0 for value in price_values)/len(price_values) if price_values else None,
+                           'priceDownShare':100*sum(value<0 for value in price_values)/len(price_values) if price_values else None,
+                           'priceFlatShare':100*sum(value==0 for value in price_values)/len(price_values) if price_values else None,
+                           'sourceStatus':sources.get(day,{}).get('status'),'sourceFile':sources.get(day,{}).get('source'),
+                           'priceSourceStatus':sources.get(day,{}).get('priceStatus'),
+                           'priceSourceFile':sources.get(day,{}).get('priceSource')})
     for index,row in enumerate(trajectory):
         previous=trajectory[index-1] if index else None
         row['ratioDeltaPP']=row['ratio']-previous['ratio'] if previous and finite(row['ratio']) and finite(previous['ratio']) else None
         row['buyShareDeltaPP']=row['buyShare']-previous['buyShare'] if previous and finite(row['buyShare']) and finite(previous['buyShare']) else None
+        row['priceUpShareDeltaPP']=row['priceUpShare']-previous['priceUpShare'] if previous and finite(row['priceUpShare']) and finite(previous['priceUpShare']) else None
     counts={'improve':0,'worsen':0,'flat':0,'unknown':0,'toBuy':0,'toSell':0}
     applicable=len(dates)>=2 and result['window']>1
     stocks=[]
@@ -96,6 +115,7 @@ def derive(result):
         stocks.append({'code':code,**state,'viewDelta':delta,'change':change})
     stocks.sort(key=lambda row:row['code'])
     return {'method':'common-cohort-weighted-flow-and-breadth','eventMethod':result.get('eventMethod'),'day':result.get('day'),'window':result['window'],
-            'dates':dates,'total':len(rows),'common':len(common),'trajectory':trajectory,
+            'dates':dates,'total':len(rows),'common':len(common),'priceCommon':len(price_common),'trajectory':trajectory,
             'marketState':market_state(trajectory,result['window'],len(common)),
+            'priceState':price_state(trajectory,result['window'],len(price_common)),
             'applicable':applicable,'counts':counts,'stocks':stocks}

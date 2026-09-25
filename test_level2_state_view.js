@@ -25,6 +25,8 @@ const one=derive({window:1,states:{A:state([row('20260922',100,1)])}});assert.eq
 const tiny=derive({window:2,states:{A:state([row('1',100,1),row('2',100,1.0000001)])}});
 assert.equal(tiny.stocks[0].change,'improve');
 assert.equal(derive({window:2,states:{}}).common,0);
+const priceView=derive({window:2,states:{A:state([{...row('1',100,-1),priceDailyReturn:5},{...row('2',100,-1),priceDailyReturn:-1}]),B:state([{...row('1',100,1),priceDailyReturn:0},{...row('2',100,1),priceDailyReturn:2}]),C:state([{...row('1',100,null),priceDailyReturn:4},{...row('2',100,1),priceDailyReturn:null}])}});
+assert.equal(priceView.priceCommon,2);assert.deepEqual(priceView.trajectory.map(r=>r.priceCoverage),[3,2]);assert.deepEqual(priceView.trajectory.map(r=>r.priceUpShare),[50,50]);assert.equal(priceView.priceState.upShareSlopePPPerDay,0);
 assert.equal(derive({window:2,states:{A:state([row('1',100,1),row('2',100,1)])}}).counts.flat,1);
 console.log('state view: weighted/cohort/missing/unknown/one-day/transitions/tiny/empty/flat PASS');
 // Exercise production async accept/failure functions with controlled responses.

@@ -52,13 +52,35 @@ class StateViewTests(unittest.TestCase):
         self.assertEqual(unknown['marketState']['status'],'NO_COMMON_COHORT')
         self.assertIsNone(unknown['marketState']['latestRatio'])
 
+    def test_price_breadth_has_independent_common_cohort(self):
+        a=[dict(row('1',100,-10),priceDailyReturn=5),dict(row('2',100,-5),priceDailyReturn=-1)]
+        b=[dict(row('1',100,10),priceDailyReturn=0),dict(row('2',100,5),priceDailyReturn=2)]
+        c=[dict(row('1',100,None),priceDailyReturn=4),dict(row('2',100,5),priceDailyReturn=None)]
+        result={'window':2,'sources':[{'day':'1','priceStatus':'FILE_PRESENT','priceSource':'/test/1.csv'}],
+                'states':{'A':{'history':a},'B':{'history':b},'C':{'history':c}}}
+        view=derive(result)
+        self.assertEqual((view['common'],view['priceCommon']),(2,2))
+        self.assertEqual([day['priceCoverage'] for day in view['trajectory']],[3,2])
+        self.assertEqual([day['priceUpShare'] for day in view['trajectory']],[50,50])
+        self.assertEqual([day['priceDownShare'] for day in view['trajectory']],[0,50])
+        self.assertEqual(view['trajectory'][0]['priceFlatShare'],50)
+        self.assertEqual(view['trajectory'][0]['priceSourceFile'],'/test/1.csv')
+        self.assertEqual(view['priceState']['upShareDeltaPP'],0)
+        self.assertEqual(view['priceState']['upShareSlopePPPerDay'],0)
+        missing=derive({'window':2,'states':{'A':{'history':[a[0],dict(a[1],priceDailyReturn=None)]}}})
+        self.assertEqual(missing['priceState']['status'],'NO_COMMON_PRICE_COHORT')
+        self.assertIsNone(missing['trajectory'][1]['priceUpShare'])
+        one=derive({'window':1,'states':{'A':{'history':[a[0]]}}})
+        self.assertEqual(one['priceState']['status'],'AVAILABLE')
+        self.assertIsNone(one['priceState']['upShareDeltaPP'])
+
     def test_matches_legacy_presentation_model_on_contract_fixture(self):
         result={'day':'20260922','window':2,'eventMethod':'日级事件口径',
-                'sources':[{'day':'20260921','status':'LEGACY_CALIBRATED_ROW_GUARD','source':'/tmp/a.parquet'},
-                           {'day':'20260922','status':'NATIVE','source':'/tmp/b.parquet'}], 'states':{
-            'A':{'history':[row('20260921',100,-10),row('20260922',100,10)]},
-            'B':{'history':[row('20260921',900,20),row('20260922',900,10)]},
-            'C':{'history':[row('20260921',50,None),row('20260922',50,5)]}}}
+                'sources':[{'day':'20260921','status':'LEGACY_CALIBRATED_ROW_GUARD','source':'/tmp/a.parquet','priceStatus':'FILE_PRESENT','priceSource':'/tmp/a.csv'},
+                           {'day':'20260922','status':'NATIVE','source':'/tmp/b.parquet','priceStatus':'FILE_PRESENT','priceSource':'/tmp/b.csv'}], 'states':{
+            'A':{'history':[dict(row('20260921',100,-10),priceDailyReturn=2),dict(row('20260922',100,10),priceDailyReturn=-1)]},
+            'B':{'history':[dict(row('20260921',900,20),priceDailyReturn=-1),dict(row('20260922',900,10),priceDailyReturn=3)]},
+            'C':{'history':[dict(row('20260921',50,None),priceDailyReturn=0),dict(row('20260922',50,5),priceDailyReturn=None)]}}}
         script="const m=require(process.argv[1]);let s='';process.stdin.on('data',x=>s+=x);process.stdin.on('end',()=>process.stdout.write(JSON.stringify(m.derive(JSON.parse(s)))));"
         output=subprocess.run(['node','-e',script,str(Path(__file__).with_name('level2_state_view.js'))],
                               input=json.dumps(result),text=True,capture_output=True,check=True,timeout=10)
@@ -66,6 +88,8 @@ class StateViewTests(unittest.TestCase):
         self.assertEqual(new['counts'],old['counts'])
         self.assertEqual(new['eventMethod'],old['eventMethod'])
         self.assertEqual(new['common'],old['common'])
+        self.assertEqual(new['priceCommon'],old['priceCommon'])
+        self.assertEqual(new['priceState'],old['priceState'])
         self.assertEqual(new['marketState']['ratioPersistence'],old['marketState']['ratioPersistence'])
         self.assertEqual(new['marketState']['breadthPersistence'],old['marketState']['breadthPersistence'])
         self.assertEqual(new['marketState']['ratioImprovement'],old['marketState']['ratioImprovement'])
@@ -77,6 +101,9 @@ class StateViewTests(unittest.TestCase):
             self.assertEqual(a['directionCoverage'],b['directionCoverage'])
             self.assertEqual(a['sourceStatus'],b['sourceStatus'])
             self.assertEqual(a['sourceFile'],b['sourceFile'])
+            self.assertEqual(a['priceSourceFile'],b['priceSourceFile'])
+            self.assertEqual(a['priceCoverage'],b['priceCoverage'])
+            self.assertEqual(a['priceUpShare'],b['priceUpShare'])
             self.assertEqual(a['commonAmount'],b['commonAmount'])
             self.assertAlmostEqual(a['ratio'],b['ratio'])
 

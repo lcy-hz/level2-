@@ -42,7 +42,21 @@ class StateTests(unittest.TestCase):
     def test_price_without_flow(self):
         s=compute({DAYS[-2]:{'adjusted':100},DAYS[-1]:{'adjusted':110}},DAYS,DAYS[-1],1)
         self.assertAlmostEqual(s['priceReturn'],10);self.assertIsNone(s['weighted'])
+        self.assertAlmostEqual(s['history'][0]['priceDailyReturn'],10)
         self.assertIn('缺成交记录',s['history'][0]['reason'])
+
+    def test_price_daily_returns_require_each_preceding_session(self):
+        values={DAYS[-4]:row(0),DAYS[-3]:row(0),DAYS[-2]:row(0),DAYS[-1]:row(0)}
+        values[DAYS[-4]]['adjusted']=100
+        values[DAYS[-3]]['adjusted']=110
+        values[DAYS[-2]]['adjusted']=100
+        values[DAYS[-1]]['adjusted']=100
+        observed=compute(values,DAYS,DAYS[-1],3)
+        self.assertEqual([round(r['priceDailyReturn'],5) for r in observed['history']],[10,-9.09091,0])
+        del values[DAYS[-2]]['adjusted']
+        incomplete=compute(values,DAYS,DAYS[-1],3)
+        self.assertEqual([r['priceDailyReturn'] is None for r in incomplete['history']],[False,True,True])
+        self.assertIsNone(incomplete['priceReturn'])
 
     def test_snapshot_receipts_reject_changed_source_or_wrong_window(self):
         import json

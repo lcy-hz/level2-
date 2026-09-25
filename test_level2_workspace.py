@@ -116,8 +116,9 @@ class WorkspaceTests(unittest.TestCase):
         model=Path(__file__).with_name('level2_state_view.js')
         (self.base/model.name).write_text(model.read_text())
         states={'1':{'day':'20260907','window':1,
-                     'sources':[{'day':'20260907','status':'NATIVE','source':'/test/deal_20260907.parquet'}],
-                     'states':{'000001.SZ':{'history':[{'day':'20260907','amount':100,'net':10,'ratio':10,'unknown':0}]}}}}
+                     'sources':[{'day':'20260907','status':'NATIVE','source':'/test/deal_20260907.parquet',
+                                 'priceStatus':'FILE_PRESENT','priceSource':'/test/20260907_stk_factor_pro.csv'}],
+                     'states':{'000001.SZ':{'history':[{'day':'20260907','amount':100,'net':10,'ratio':10,'unknown':0,'priceDailyReturn':2}]}}}}
         with patch.object(self.w.state,'frozen',return_value=states):
             result=self.w.save({'day':'20260907','data':self.data,'stateWindow':1})
         bundle=json.loads((self.w.snapshot_path(result['id'])/'bundle.json').read_text())
@@ -126,6 +127,8 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(bundle['stateViews']['1']['marketState']['latestRatio'],10)
         self.assertIsNone(bundle['stateViews']['1']['marketState']['ratioSlopePPPerDay'])
         self.assertEqual(bundle['stateViews']['1']['trajectory'][0]['sourceFile'],'/test/deal_20260907.parquet')
+        self.assertEqual(bundle['stateViews']['1']['priceState']['latestUpShare'],100)
+        self.assertEqual(bundle['stateViews']['1']['trajectory'][0]['priceSourceFile'],'/test/20260907_stk_factor_pro.csv')
         self.assertIn(b'stateViews',self.w.frozen_page(result['id']))
         self.assertEqual(self.w.snapshot_document(result['id'])['stateViews']['1']['trajectory'][0]['ratio'],10)
 

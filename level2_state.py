@@ -70,7 +70,13 @@ def compute(rows, days, day, window):
     baseline=rows.get(days[baseidx]) if baseidx>=0 else None
     prices=[baseline,*series]
     price_ok=len(dates)==window and all(r and r.get('adjusted',0)>0 for r in prices)
-    history=[{'day':d,**(r or {}),'reason':(r or {}).get('reason') or ('方向记录可用' if usable(r) else '缺成交记录或方向未知／停牌未核实')} for d,r in zip(dates,series)]
+    history=[]
+    for index,(d,r) in enumerate(zip(dates,series)):
+        earlier,now=prices[index:index+2]
+        price_daily=(100*(now['adjusted']/earlier['adjusted']-1)
+                     if earlier and now and earlier.get('adjusted',0)>0 and now.get('adjusted',0)>0 else None)
+        history.append({'day':d,**(r or {}),'priceDailyReturn':price_daily,
+                        'reason':(r or {}).get('reason') or ('方向记录可用' if usable(r) else '缺成交记录或方向未知／停牌未核实')})
     return {'level':level,'delta':delta,'weighted':100*sum(r['net'] for r in flows)/sum(r['amount'] for r in flows) if full else None,
             'slope':slope,'sign':sign(level) if level is not None else None,'streak':streak,'leftCensored':left,
             'improve':improve,'worsen':worsen,'improveCensored':improve is not None and len(series)>1 and improve==len(series)-1,
@@ -177,6 +183,10 @@ class StateService:
                     result[code]=v
         return result
 
+    def price_source(self,day):
+        from level2_paths import PATHS
+        return PATHS['stk_factor_pro']/f'{day}_stk_factor_pro.csv'
+
     def start(self,day,window):
         self.validate(day,window);self.workspace.get_service(day)
         key=(day,window);identity=self.identity(day,window)
@@ -202,6 +212,9 @@ class StateService:
             for d in dates:
                 with self.lock:self.jobs[key]={'status':'running','message':'连续状态：正在聚合 '+d,'identity':identity}
                 rows,source=self.facts(d);prices=self.prices(d)
+                price_file=self.price_source(d)
+                source['priceStatus']='FILE_PRESENT' if price_file.is_file() else 'MISSING'
+                source['priceSource']=str(price_file) if price_file.is_file() else None
                 # Price evidence is independent of missing Level-2 flow evidence.
                 for code,value in prices.items():rows.setdefault(code,{})['adjusted']=value
                 allrows[d]=rows;sources.append(source)
