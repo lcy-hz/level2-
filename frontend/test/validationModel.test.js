@@ -1,6 +1,41 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { findStockCode, formatPct, sessionDefaults, viewRows } from '../src/validationModel.js'
+import { findStockCode, formatPct, mixedSourceWarning, sessionDefaults, sourcePair, sourceStrata, viewRows } from '../src/validationModel.js'
+
+test('source pairs expose cross-regime days without filling old snapshots', () => {
+  const result = { flowSources: [
+    { day: '20260831', status: 'LEGACY_CALIBRATED_ROW_GUARD' },
+    { day: '20260901', status: 'NATIVE' },
+    { day: '20260902', status: 'MISSING' },
+    { day: '20260903', status: 'NATIVE' },
+  ] }
+  assert.equal(sourcePair(result, '20260901'), '旧格式已校准 → 正式新格式')
+  assert.equal(sourcePair(result, '20260903'), '缺档 → 正式新格式')
+  assert.equal(sourcePair(result, '20260831'), '前日来源未覆盖')
+  assert.equal(sourcePair({}, '20260901'), '旧结果未保存来源')
+  assert.equal(mixedSourceWarning(result), true)
+  assert.equal(mixedSourceWarning({ flowSources: result.flowSources.slice(1) }), false)
+  const strata = sourceStrata(result, [
+    { day: '20260901', observed: 2, meanExcessPct: 1 },
+    { day: '20260902', observed: 0, meanExcessPct: null },
+    { day: '20260903', observed: 3, meanExcessPct: 3 },
+  ])
+  assert.deepEqual(strata.map(row => [row.label, row.triggerDays, row.comparableDays,
+    row.comparableEvents, row.equalDayMeanExcessPct]), [
+    ['旧格式已校准 → 正式新格式', 1, 1, 2, 1],
+    ['正式新格式 → 缺档', 1, 0, 0, null],
+    ['缺档 → 正式新格式', 1, 1, 3, 3],
+  ])
+  assert.equal(sourceStrata({}, []), null)
+  const sameSource = { flowSources: [
+    { day: '20260901', status: 'NATIVE' }, { day: '20260902', status: 'NATIVE' },
+    { day: '20260903', status: 'NATIVE' },
+  ] }
+  assert.equal(sourceStrata(sameSource, [
+    { day: '20260902', observed: 100, meanExcessPct: 1 },
+    { day: '20260903', observed: 1, meanExcessPct: -1 },
+  ])[0].equalDayMeanExcessPct, 0)
+})
 
 test('validation rows retain maturity and split, with no fabricated zero', () => {
   const result = { summary: [
