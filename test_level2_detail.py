@@ -62,6 +62,8 @@ class DetailTests(unittest.TestCase):
         self.assertAlmostEqual(result['quotePath']['segments'][0]['midChangePct'],1)
         self.assertEqual(result['quotePath']['segments'][0]['depthValid'],2)
         self.assertEqual(result['quotePath']['segments'][0]['tenLevelValid'],2)
+        self.assertIsNotNone(result['quotePath']['segments'][0]['medianMicropricePremiumBps'])
+        self.assertIsNotNone(result['quotePath']['segments'][0]['medianWeightedTenImbalancePct'])
         self.assertEqual(result['tradePrintDrawdown']['status'], 'MISSING_SEQUENCE')
 
     def test_trade_print_path_requires_order_and_valid_prices(self):
