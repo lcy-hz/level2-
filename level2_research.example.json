@@ -1,0 +1,6 @@
+{
+  "history_roots": ["/absolute/path/history-data/level2"],
+  "trade_calendar": "/absolute/path/trade_cal.csv",
+  "default_window": 5,
+  "max_window": 60
+}

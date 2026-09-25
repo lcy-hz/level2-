@@ -32,19 +32,28 @@ def digest(value):
 
 class Workspace:
     def __init__(self,service,base=BASE,calendar=None):
-        from level2_kline import CALENDAR
+        from level2_state import settings
         self.base,self.root,self.default=Path(base),service.root,service
-        self.calendar=Path(calendar) if calendar else CALENDAR
+        self.calendar=Path(calendar) if calendar else Path(settings()['trade_calendar'])
         self.reports=self.base/'.level2_reports'
         self.snapshots=self.base/'level2_snapshots'
         self.receipts=self.base/'.level2_chart_receipts'
         self.services={service.day:service};self.jobs={};self.lock=Lock()
         self.pool=ThreadPoolExecutor(max_workers=1)
+        from level2_state import StateService
+        self.state=StateService(self)
+        self._patterns=None
+
+    @property
+    def patterns(self):
+        if self._patterns is None:
+            from level2_patterns import PatternService
+            self._patterns=PatternService(self)
+        return self._patterns
 
     def window(self,day):
-        dates=sorted(p.name[:8] for p in self.calendar.glob('*_daily.csv')
-                     if re.fullmatch(r'\d{8}_daily.csv',p.name) and p.name[:8]<=day)
-        return dates[-7:]
+        from level2_contract import window
+        return window(day,7,self.calendar)
 
     def gate(self,day):
         audit=self.root/'_conversion_audit'/day
@@ -56,17 +65,22 @@ class Workspace:
         return missing
 
     def sources(self,day):
-        result=[]
+        result=[fingerprint(self.calendar)]
         for d in self.window(day):
             result.extend(fingerprint(self.root/f'{k}_{d}.parquet') for k in ['deal','snapshot','order_raw'])
             manifest=self.root/'_conversion_audit'/d/'manifest.json'
             item=fingerprint(manifest)
             if manifest.is_file():item['sha256']=hashlib.sha256(manifest.read_bytes()).hexdigest()
             result.append(item)
-        from level2_detail_server import REPORT
-        from level2_paths import CONFIG
+        from level2_paths import CONFIG,PATHS
         result.append(fingerprint(CONFIG))
-        result.extend(fingerprint(p) for p in [self.base/'generate_level2_report.py',self.base/'level2_workspace.py'])
+        result.append(fingerprint(PATHS['stock_basic']))
+        # Only report-generation inputs invalidate the generated report. UI/API
+        # changes do not, while name data and imported calculators do.
+        result.extend(fingerprint(self.base/p) for p in [
+            'generate_level2_report.py','level2_contract.py','level2_quality.py',
+            'level2_state.py','level2_paths.py','level2_kline.py',
+            'level2_kline_ui.html','level2_report_html.py','level2_detail_ui.html'])
         return result
 
     def dates(self):
@@ -79,7 +93,8 @@ class Workspace:
             if DATE.fullmatch(p.stem):found.add(p.stem)
         rows=[]
         for day in sorted(found,reverse=True):
-            window=self.window(day)
+            try:window=self.window(day)
+            except (OSError,ValueError):window=[]
             missing=self.gate(day)
             window_missing=[d for d in window if self.gate(d)]
             ready=(len(window)==7 and window[-1]==day and not window_missing and not missing)
@@ -119,6 +134,13 @@ class Workspace:
             if day not in self.services:
                 self.services[day]=Service(read_report(self.report_path(day)),root=self.root)
             return self.services[day]
+
+    def report_document(self,day):
+        """Read-only, source-gated payload shared by the HTML and future clients."""
+        service=self.get_service(day)
+        provenance=self.report_path(day).with_suffix('.provenance.json')
+        lineage=json.loads(provenance.read_text()) if provenance.is_file() else {'status':'UNKNOWN_GENERATION_LINEAGE'}
+        return {'mode':'live','day':day,'researchOnly':True,'provenance':lineage,'report':service.report}
 
     def build(self,day):
         rows={r['day']:r for r in self.dates()}
@@ -165,7 +187,7 @@ class Workspace:
         if kind=='minute':
             sources=[fingerprint(result['source']),fingerprint(result['preCloseSource'])]
         else:
-            sources=[fingerprint(Path(result['source'])/f'{d}_stk_factor_pro.csv') for d in result['labels']]
+            sources=[fingerprint(Path(p)) for p in result['sourceFiles']] if result.get('sourceFiles') else [fingerprint(Path(result['source'])/f'{d}_stk_factor_pro.csv') for d in result['labels']]
         value={'result':result,'kind':kind,'sources':sources,'dataSha256':digest(result)}
         (self.receipts/f'{receipt}.json').write_text(encoded(value))
         return receipt
@@ -173,13 +195,22 @@ class Workspace:
     def decorate(self,html,context):
         # One canonical toolbar; context precedes all chart/detail scripts.
         html=re.sub(r'<!-- WORKSPACE START -->.*?<!-- WORKSPACE END -->','',html,flags=re.S)
-        config='<script>window.L2_CONTEXT='+encoded(context)+';window.L2_CAPTURE={charts:{}};</script>'
+        config='<script>window.L2_CONTEXT='+encoded(context)+';window.L2_CAPTURE={charts:{},states:{}};</script>'
         html=html.replace('<head>','<head>'+config,1)
-        return html.replace('</body>','<!-- WORKSPACE START -->'+(self.base/'level2_workspace_ui.html').read_text()+'<!-- WORKSPACE END --></body>')
+        state_ui=self.base/'level2_state_ui.html'
+        model=self.base/'level2_state_view.js'
+        model_script='<script>'+model.read_text()+'</script>' if model.exists() else ''
+        pattern_ui=self.base/'level2_patterns_ui.html'
+        return html.replace('</body>','<!-- WORKSPACE START -->'+(self.base/'level2_workspace_ui.html').read_text()+model_script+(state_ui.read_text() if state_ui.exists() else '')+(pattern_ui.read_text() if pattern_ui.exists() else '')+'<!-- WORKSPACE END --></body>')
 
     def page(self,day):
         if self.status(day)['status']!='ready':
-            html='<html><head><meta charset="utf-8"></head><body><main><h1>连续市场与个股证据报告</h1><p>当前报告未就绪或来源已变化。请在上方选择日期并计算，不展示旧数据。</p></main></body></html>'
+            html='''<html><head><meta charset="utf-8"><title>Level-2 报告待计算</title><style>
+                body{box-sizing:border-box;margin:0;background:#101820;color:#e7f0fa;font:16px/1.6 system-ui,-apple-system,sans-serif}
+                main{max-width:1100px;margin:0 auto;padding:24px}
+                h1{font-size:28px;margin:0 0 18px}
+                .unavailable{padding:18px 20px;border:1px solid #416781;border-radius:10px;background:#172435;color:#c9d8e7}
+                </style></head><body><main><h1>连续市场与个股证据报告</h1><p class="unavailable">当前报告未就绪或来源已变化。请在上方选择日期并计算；完成前不展示旧数据。</p></main></body></html>'''
             return self.decorate(html,{'mode':'live','day':day,'unavailable':True}).encode()
         self.get_service(day)
         return self.decorate(self.report_path(day).read_text(),{'mode':'live','day':day}).encode()
@@ -201,6 +232,7 @@ class Workspace:
         day=request.get('day');service=self.get_service(day)
         data=request.get('data');filters=request.get('filters',{})
         if not isinstance(data,dict) or data.get('markets')!=service.report['markets']:raise ValueError('报告日期或统计不匹配')
+        if data.get('quality')!=service.report.get('quality'):raise ValueError('数据质量证据与服务端不一致')
         cards=data.get('cards',[])
         if len(cards)!=len(service.cards) or {c.get('code') for c in cards}!=set(service.cards):raise ValueError('报告股票覆盖不一致')
         mutable={'segments','parents','orders','regularCoverage','computedDetail'}
@@ -219,7 +251,26 @@ class Workspace:
             if r['day']!=day or r['code'] not in service.cards or key!=receipt['kind']+'/'+r['code']:raise ValueError('快照图表日期或股票不一致')
             charts[key]=r;receipts[key]=receipt
         identifier=uuid.uuid4().hex;saved=datetime.now(timezone.utc).isoformat()
-        context={'mode':'snapshot','day':day,'id':identifier,'savedAt':saved,'charts':charts,'filters':filters}
+        states=self.state.frozen(request.get('states',{}),day)
+        state_window=request.get('stateWindow')
+        if state_window is not None and str(state_window) not in states:raise ValueError('选中的观察窗口未冻结')
+        # Derive from verified receipts with the identical pure model used by the page.
+        views={}
+        if states:
+            process=subprocess.run(['node','-e',"const m=require(process.argv[1]);let s='';process.stdin.on('data',x=>s+=x);process.stdin.on('end',()=>process.stdout.write(JSON.stringify(Object.fromEntries(Object.entries(JSON.parse(s)).map(([k,v])=>[k,m.derive(v)])))));",str(self.base/'level2_state_view.js')],input=encoded(states),text=True,capture_output=True,timeout=30,check=True)
+            views=json.loads(process.stdout)
+        context={'mode':'snapshot','day':day,'id':identifier,'savedAt':saved,'charts':charts,'filters':filters,'states':states,'stateWindow':state_window}
+        context['stateViews']=views
+        pattern_result=None
+        if request.get('patternReceipt'):
+            verified=self.patterns.receipt(request['patternReceipt'],day)
+            codes=request.get('patternCharts',[])
+            if not isinstance(codes,list) or len(codes)>200 or any(not isinstance(c,str) or c not in verified['details'] for c in codes):raise ValueError('形态图范围无效，最多200只已查看图')
+            pattern_result={'result':verified['result'],'details':{c:verified['details'][c] for c in codes}}
+        context['patterns']=pattern_result
+        ui=request.get('patternUI',{})
+        if not isinstance(ui,dict) or len(encoded(ui))>10000:raise ValueError('形态视图参数无效')
+        context['patternUI']=ui
         template=self.report_path(day).read_text()
         marker=re.search(r'const\s+D\s*=\s*',template)
         _,length=json.JSONDecoder().raw_decode(template[marker.end():])
@@ -227,7 +278,9 @@ class Workspace:
         html=self.decorate(html,context)
         provenance=self.report_path(day).with_suffix('.provenance.json')
         bundle={'id':identifier,'day':day,'savedAt':saved,'chartCount':len(charts),'report':data,'filters':filters,
-                'charts':receipts,'payloadSha256':digest(data),'htmlSha256':hashlib.sha256(html.encode()).hexdigest(),
+                'stateViews':views,
+                'patterns':pattern_result,'patternUI':ui,
+                'charts':receipts,'states':states,'stateWindow':state_window,'payloadSha256':digest(data),'htmlSha256':hashlib.sha256(html.encode()).hexdigest(),
                 'reportProvenance':json.loads(provenance.read_text()) if provenance.exists() else {'status':'UNKNOWN_GENERATION_LINEAGE'},
                 'sourcesObservedAtSave':self.sources(day),
                 'scope':'整份当前报告与已加载详情；只冻结本次页面已成功读取的图表；其余明确未保存。历史日期快照不是历史当时可得性证明。'}
@@ -242,3 +295,25 @@ class Workspace:
         html=(p/'report.html').read_bytes()
         if (p/'COMMITTED').read_text()!=hashlib.sha256(html).hexdigest():raise ValueError('快照文件完整性校验失败')
         return html
+
+    def snapshot_document(self,identifier):
+        """Serve only the saved payload; never hydrate a snapshot from live data."""
+        p=self.snapshot_path(identifier)
+        html=self.frozen_page(identifier).decode('utf-8')
+        bundle=json.loads((p/'bundle.json').read_text())
+        marker=re.search(r'const\s+D\s*=\s*',html)
+        if not marker:raise ValueError('快照报告缺少数据载荷')
+        frozen_report=json.JSONDecoder().raw_decode(html[marker.end():])[0]
+        context_marker=re.search(r'window\.L2_CONTEXT\s*=\s*',html)
+        if not context_marker:raise ValueError('快照缺少冻结上下文')
+        frozen_context=json.JSONDecoder().raw_decode(html[context_marker.end():])[0]
+        if (bundle.get('id')!=identifier or digest(bundle.get('report'))!=bundle.get('payloadSha256')
+                or digest(frozen_report)!=digest(bundle.get('report'))
+                or frozen_context.get('id')!=identifier or frozen_context.get('day')!=bundle.get('day')):
+            raise ValueError('快照数据完整性校验失败')
+        return {'mode':'snapshot','day':bundle['day'],'id':identifier,'savedAt':bundle['savedAt'],
+                'researchOnly':True,'provenance':bundle['reportProvenance'],'report':bundle['report'],
+                'integrity':{'report':'verified-against-frozen-html','metadata':'legacy-bundle-unverified'},
+                'stateViews':frozen_context.get('stateViews',{}),
+                'stateWindow':frozen_context.get('stateWindow'),
+                'filters':frozen_context.get('filters',{}),'scope':bundle['scope']}

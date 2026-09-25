@@ -11,10 +11,19 @@ from level2_detail_server import Service,make_handler
 
 
 class FreshChartTests(unittest.TestCase):
+    def test_by_code_qfq_without_factor_and_future_cutoff(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);file=root/'000977_SZ_stk_factor_pro.csv'
+            file.write_text('ts_code,trade_date,open_qfq,high_qfq,low_qfq,close_qfq,vol,amount\n000977.SZ,20260921,9,11,8,10,100,125\n000977.SZ,20260922,10,12,9,11,200,250\n000977.SZ,20260923,20,22,19,21,999,999\n')
+            result=build_bundle({'000977.SZ'},'20260922',root,root,include_volume=True)
+            self.assertEqual(result['dates'],['20260921','20260922'])
+            self.assertEqual(result['series']['000977.SZ']['bars'][-1],[1,10,12,9,11,200,250000])
+            self.assertEqual(result['series']['000977.SZ']['sourceFiles'],[str(file)])
+
     def test_daily_volume_reread_and_date_cutoff(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
-            header='ts_code,trade_date,open,high,low,close,adj_factor,vol,amount\n'
+            header='ts_code,trade_date,open_qfq,high_qfq,low_qfq,close_qfq,unused,vol,amount\n'
             file=root/'20260922_stk_factor_pro.csv'
             file.write_text(header+'000977.SZ,20260922,10,12,9,11,2,100,125\n')
             (root/'20260923_stk_factor_pro.csv').write_text(header+'000977.SZ,20260923,20,22,19,21,2,999,999\n')

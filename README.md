@@ -4,7 +4,7 @@
 
 ## 启动
 
-需要 Python 及 `duckdb`、`pandas`。将 `level2_paths.example.json` 复制为同目录 `level2_paths.json`，填写实际绝对路径。配置修改后重启服务。
+需要 Python 及 `duckdb`、`pandas`、`pyarrow`。将 `level2_paths.example.json` 复制为同目录 `level2_paths.json`，填写实际绝对路径。配置修改后重启服务。
 
 首次运行需先生成基准报告（当前服务默认基准日为 20260922，需对应正式数据及提交标识）：
 
@@ -15,20 +15,44 @@ python level2_detail_server.py
 
 访问 http://127.0.0.1:18762/level2-market-scan_20260922.html 。服务仅监听本机，可选择其他有完整数据的日期生成报告。生成器的默认日期回归断言针对本项目已核验的数据，并非通用任意日期启动器。
 
+### Vue 3 页面（逐项迁移中）
+
+另开终端运行 `cd frontend && npm ci && npm run dev`，访问 http://127.0.0.1:5173/ 。先启动上面的 Python 服务；Vite 只向本机 `127.0.0.1:18762` 代理 `/api`，不直接读取原始 Level-2 文件。
+
+当前 Vue 页面接入 `/api/report/data?date=YYYYMMDD`、`/api/snapshot/data?id=...` 和 Python 派生的 `/api/state/view`，展示质量报告、7 日市场轨迹、连续观察、全库候选筛选及个股证据。实时报告必须通过现有来源指纹门槛；快照仅返回保存时已冻结的报告和连续窗口，不拿最新数据填充。形态、K 线、按需深查和快照保存尚未迁移，仍使用旧页面。开发验证：`cd frontend && npm test && npm run build`。
+
 ## 功能与边界
 
 - 全市场日级扫描、候选筛选排序、个股按需深查。
+- 目标日三表质量报告：证券交并集与缺少清单、日期/时钟计数、未知方向金额、成交候选键重复和两种委托字段的匹配核验。按证券分块，原始文件只读；详细SQL及可重跑入口见 `Level2数据质量核验.ipynb`。
+- 原报告、按需深查和连续状态统一未知方向降级：未知不填零。无效关联编号单列，不拼成大单；缺频道与订单事件语义，因此编号分组仍不等于机构母单。
 - 本地日K／分钟K及成交量；本地最新读取不是交易所实时行情。
+- 日K与形态使用 `stk_factor_pro_by_code`（例如 `000977_SZ_stk_factor_pro.csv`）中的qfq价格／指标，不依赖adj_factor、不回退by_date，截断至报告日；原by_date配置继续用于既有连续状态。形态Tab支持22类研究规则、筛选、逐事件标注与逐根K线量价／指标详情，尚未验证收益优势。
 - 日期报告与只读快照；仅冻结已加载的图表。
-- 连续状态、可逐日调整的观察窗口及事件观察仍属设计，详见 `Level2数据实战使用框架.md`，不能视为已实现。
+- 连续观察支持按1个交易日增减窗口、输入天数及3／5／20日快捷选择；展示净额比水平、日变化、金额加权窗口水平、斜率和持续性，成交额与复权价格独立显示覆盖。
+- 原报告与连续状态均依赖本地 SSE 交易日历，拒绝日历缺日/重复，不跳过缺数据的交易日。快照仅冻结已计算并加载的窗口，不补读新数据。
+- 事件观察、连续指标筛选排序、相对基准／回撤、市场共同样本状态和策略验证尚未实现。连续状态不是吸筹确认或买卖指令。
+
+## 历史来源与连续观察
+
+将 `level2_research.example.json` 复制为 `level2_research.json`，设置 `history_roots`、`trade_calendar`、`default_window` 和 `max_window`（默认60）。历史根目录应直接包含 `deal_YYYYMMDD.parquet`。当前本机补充来源是 `/Volumes/990pro/data/level2`。
+
+读取优先级：主数据目录优先，历史目录补缺，同日不叠加。中文原生格式要求正式提交标识；已校准 `/Volumes/990pro/data/level2` 英文旧格式：价格除以100，Side=0主动买、Side=1主动卖，并逐条验证正数买卖编号的先后关系。未知来源、缺编号或方向冲突记录仍为未知，不强行归类。校准证据见 `Level2方向校准说明.md`。`/Volumes/990pro/data/history` 的按月个股文件尚未接入，不能据此视为已校准。
+
+连续观察按需扫描原始成交并缓存日级汇总；首次长窗口可能较慢。来源指纹变化后重新计算。复权价格使用本地 `close×adj_factor` 的比值，历史当时可得性未验证。缺失不填零、不缩短窗口冒充完整。
 
 原始行情、本机配置、缓存、生成报告、快照及其他研究文件不纳入仓库。首次克隆不会附带可直接浏览的业务数据。
 
 ## 验证
 
+形态计算的by_code CSV读取采用最多8线程；界面显示完成数／总数。读取结果按代码固定排序，继续保留窗口截断、冲突行与来源变化校验。形态识别阶段仍为单任务计算，并发读取不代表整个流程加速8倍。
+
 ```sh
-python -m unittest test_level2_workspace test_level2_detail test_level2_kline test_level2_intraday test_level2_chart_axis test_level2_fresh_chart
+python -m unittest discover -p 'test_level2*.py'
 python validate_level2_report.py
+node test_level2_pattern_chart.js
 ```
 
 测试前需建立本机路径配置；报告校验还要求先生成基准报告。
+
+质量报告不等于完整性认证：逐字段完全重复行、事件乱序、撤单/补单类型和队列重建仍未完成。候选键重复可能是频道或多事件问题，不自动去重；盘后记录可能是延迟发布，不作可交易盘口。

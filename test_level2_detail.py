@@ -47,6 +47,15 @@ class DetailTests(unittest.TestCase):
         self.assertEqual(result['segments'][0]['a'], 1000)
         self.assertEqual(result['orders'][0]['r'], 1)
 
+    def test_unknown_direction_is_not_zero(self):
+        con=duckdb.connect();path=self.root/f'deal_{self.day}.parquet'
+        con.execute('CREATE TABLE t AS SELECT * FROM read_parquet(?)',[str(path)])
+        con.execute('UPDATE t SET "BS标志"=\'?\' WHERE "BS标志"=\'B\'')
+        con.execute('COPY t TO ? (FORMAT PARQUET)',[str(path)]);con.close()
+        result=calculate('600000.SH',self.day,{'amount':1200,'net':None},lambda _:None,self.root)
+        self.assertIsNone(result['net']);self.assertEqual(result['unknownAmount'],1000)
+        self.assertEqual(result['knownNet'],-200);self.assertIsNone(result['segments'][0]['n'])
+
     def test_cache_validation_and_allowlist(self):
         service = Service(self.report, self.root, self.root / 'cache')
         with self.assertRaises(ValueError):
