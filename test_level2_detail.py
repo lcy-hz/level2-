@@ -4,10 +4,13 @@ import unittest
 from pathlib import Path
 from threading import Thread
 from http.server import ThreadingHTTPServer
+from unittest.mock import patch
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 import duckdb
 import pandas as pd
+import level2_detail_research as detail_research
+import level2_detail_server as detail_http
 from level2_detail_server import Service, calculate, source_identity, make_handler
 from level2_trade_path import observe_prints
 
@@ -169,6 +172,20 @@ class DetailTests(unittest.TestCase):
         source=self.root/f'snapshot_{self.day}.parquet'
         with source.open('ab') as stream:stream.write(b'changed')
         self.assertNotEqual(before,source_identity(self.day,self.root))
+
+    def test_calculation_identity_is_owned_by_research_not_http(self):
+        self.assertIs(detail_http.calculate, detail_research.calculate)
+        self.assertIs(detail_http.source_identity, detail_research.source_identity)
+        before = source_identity(self.day, self.root)
+        with patch.object(detail_http, '__file__', str(self.root / 'http.py')):
+            self.assertEqual(before, source_identity(self.day, self.root))
+        calculator = self.root / 'calculator.py'
+        calculator.write_text('calculation one', encoding='utf-8')
+        with patch.object(detail_research, '__file__', str(calculator)):
+            first = source_identity(self.day, self.root)
+            calculator.write_text('calculation two', encoding='utf-8')
+            second = source_identity(self.day, self.root)
+        self.assertNotEqual(first, second)
 
     def test_cache_validation_and_allowlist(self):
         service = Service(self.report, self.root, self.root / 'cache')
