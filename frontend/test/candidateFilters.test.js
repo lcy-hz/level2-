@@ -1,12 +1,25 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { filterCandidates, stateNarrative } from '../src/candidateFilters.js'
+import { filterCandidates, normalizeCandidateFilters, stateNarrative } from '../src/candidateFilters.js'
 
 const rows = [
   { code: '000001.SZ', name: '甲', label: '主动', returnSign: 1, net: 10 },
   { code: '000002.SZ', name: '乙', label: '被动', returnSign: -1, net: null },
   { code: '000003.SZ', name: '丙', label: '主动', returnSign: 1, net: 20 },
 ]
+
+test('historical snapshot filter labels restore without changing the frozen bundle', () => {
+  const saved = { search: '000001', filter: '全部', direction: 'all', sort: 'net', sortOrder: 'asc' }
+  const restored = normalizeCandidateFilters(saved)
+  assert.equal(restored.filter, 'all')
+  assert.equal(restored.sortDirection, 'asc')
+  assert.deepEqual(filterCandidates(rows, { query: restored.search, label: restored.filter,
+    direction: restored.direction, order: restored.sort, orderDirection: restored.sortDirection }).map(row => row.code), ['000001.SZ'])
+  assert.equal(saved.filter, '全部')
+  assert.equal(saved.sortDirection, undefined)
+  assert.equal(normalizeCandidateFilters({ filter: '被动', sortDirection: 'desc', sortOrder: 'asc' }).filter, '被动')
+  assert.equal(normalizeCandidateFilters({ sortDirection: 'desc', sortOrder: 'asc' }).sortDirection, 'desc')
+})
 
 test('search and direction intersect without mutating source', () => {
   const original = rows.map(row => row.code)

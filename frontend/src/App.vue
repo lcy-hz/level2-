@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { dates, report, reportStatus, saveSnapshot, snapshot, snapshots, startReportBuild, stateMeta } from './api.js'
 import { adjacentTradingDay } from './tradingDays.js'
+import { normalizeCandidateFilters } from './candidateFilters.js'
 import MarketTimeline from './components/MarketTimeline.vue'
 import QualitySummary from './components/QualitySummary.vue'
 import CandidatePanel from './components/CandidatePanel.vue'
@@ -42,6 +43,9 @@ let buildRequest = 0
 let buildTimer = null
 
 const current = computed(() => document.value?.report?.markets?.at(-1) || null)
+// Key on the document that has finished loading, not the requested selection.
+// Otherwise a same-day snapshot switch can retain the previous filters/dialogs.
+const panelKey = computed(() => document.value?.id || `${document.value?.mode}:${document.value?.day}`)
 const sourceStatus = computed(() => dateRows.value.find(row => row.day === targetDay.value))
 const previousDay = computed(() => adjacentTradingDay(tradingDays.value, document.value?.day, -1))
 const nextDay = computed(() => adjacentTradingDay(tradingDays.value, document.value?.day, 1))
@@ -65,7 +69,7 @@ async function load() {
     stateWindow.value = result.mode === 'snapshot' ? result.stateWindow ?? null : null
     continuousUI.value = result.continuousUI || {}
     activeStateView.value = result.mode === 'snapshot' && result.stateWindow != null ? result.stateViews?.[String(result.stateWindow)] || null : null
-    filters.value = { search: '', filter: 'all', direction: 'all', sort: 'default', ...(result.filters || {}) }
+    filters.value = normalizeCandidateFilters(result.filters)
     activeTab.value = ['patterns', 'validation'].includes(result.patternUI?.tab) ? result.patternUI.tab : 'review'
     patternUI.value = { ...(result.patternUI || {}), tab: activeTab.value }
     patternReceipt.value = ''
@@ -238,9 +242,9 @@ onBeforeUnmount(() => { buildRequest++; clearTimeout(buildTimer) })
         <div class="metric"><span>上涨 / 下跌</span><strong>{{ current.up ?? '未知' }} / {{ current.down ?? '未知' }}</strong></div>
       </div>
       <nav class="research-tabs" role="tablist" aria-label="研究视图"><button role="tab" :aria-selected="activeTab === 'review'" aria-controls="review-panel" @click="activeTab = 'review'">Level‑2 复盘</button><button role="tab" :aria-selected="activeTab === 'patterns'" aria-controls="patterns-panel" @click="activeTab = 'patterns'">个股形态</button><button role="tab" :aria-selected="activeTab === 'validation'" aria-controls="validation-panel" @click="activeTab = 'validation'">后续验证</button></nav>
-      <div id="review-panel" role="tabpanel" v-show="activeTab === 'review'"><QualitySummary :quality="document.report.quality" :gate="document.report.gate" /><MarketTimeline :markets="document.report.markets" /><ContinuousPanel :key="document.mode + document.day" :day="document.day" :cards="document.report.cards" :frozen="document.mode === 'snapshot'" :previous-day="previousDay" :next-day="nextDay" :snapshot-views="document.stateViews || {}" :snapshot-window="document.stateWindow" :snapshot-charts="document.charts || {}" :initial-ui="continuousUI" @navigate-day="moveTradingDay" @chart-loaded="captureChart" @state-loaded="captureState" @view-applied="captureAppliedState" @ui-change="captureContinuousUI" /><CandidatePanel :key="document.mode + document.day" :cards="document.report.cards" :day="document.day" :frozen="document.mode === 'snapshot'" :snapshot-charts="document.charts || {}" :initial-filters="filters" :state-view="activeStateView" @chart-loaded="captureChart" @detail-loaded="captureDetail" @filters-change="filters = $event" /></div>
-      <div id="patterns-panel" role="tabpanel" v-show="activeTab === 'patterns'"><PatternPanel :key="document.mode + document.day" :day="document.day" :frozen="document.mode === 'snapshot'" :snapshot-patterns="document.patterns || null" :snapshot-charts="document.charts || {}" :initial-ui="document.patternUI || {}" :levels="stateLevels" :state-window="stateWindow" @chart-loaded="captureChart" @pattern-loaded="capturePattern" @detail-loaded="capturePatternDetail" @ui-change="capturePatternUI" /></div>
-      <div id="validation-panel" role="tabpanel" v-show="activeTab === 'validation'"><ValidationPanel :key="document.mode + document.day" :day="document.day" :cards="document.report.cards" :frozen="document.mode === 'snapshot'" :saved="document.validation || null" :saved-details="document.validationDetails || {}" @loaded="captureValidation" @detail-loaded="captureValidationDetail" /></div>
+      <div id="review-panel" role="tabpanel" v-show="activeTab === 'review'"><QualitySummary :quality="document.report.quality" :gate="document.report.gate" /><MarketTimeline :markets="document.report.markets" /><ContinuousPanel :key="panelKey" :day="document.day" :cards="document.report.cards" :frozen="document.mode === 'snapshot'" :previous-day="previousDay" :next-day="nextDay" :snapshot-views="document.stateViews || {}" :snapshot-window="document.stateWindow" :snapshot-charts="document.charts || {}" :initial-ui="continuousUI" @navigate-day="moveTradingDay" @chart-loaded="captureChart" @state-loaded="captureState" @view-applied="captureAppliedState" @ui-change="captureContinuousUI" /><CandidatePanel :key="panelKey" :cards="document.report.cards" :day="document.day" :frozen="document.mode === 'snapshot'" :snapshot-charts="document.charts || {}" :initial-filters="filters" :state-view="activeStateView" @chart-loaded="captureChart" @detail-loaded="captureDetail" @filters-change="filters = $event" /></div>
+      <div id="patterns-panel" role="tabpanel" v-show="activeTab === 'patterns'"><PatternPanel :key="panelKey" :day="document.day" :frozen="document.mode === 'snapshot'" :snapshot-patterns="document.patterns || null" :snapshot-charts="document.charts || {}" :initial-ui="document.patternUI || {}" :levels="stateLevels" :state-window="stateWindow" @chart-loaded="captureChart" @pattern-loaded="capturePattern" @detail-loaded="capturePatternDetail" @ui-change="capturePatternUI" /></div>
+      <div id="validation-panel" role="tabpanel" v-show="activeTab === 'validation'"><ValidationPanel :key="panelKey" :day="document.day" :cards="document.report.cards" :frozen="document.mode === 'snapshot'" :saved="document.validation || null" :saved-details="document.validationDetails || {}" @loaded="captureValidation" @detail-loaded="captureValidationDetail" /></div>
       <section class="panel migration-note"><h2>研究边界</h2><p>日级报告、连续观察、单股深查、22 类形态及事件后续收益均为研究证据。收盘后可识别事件的后续收盘收益，不等于可成交收益；盘口队列重建、参数外推及交易授权仍未实现。</p></section>
     </template>
   </main>

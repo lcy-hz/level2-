@@ -9,6 +9,17 @@ const stateMetric = {
 }
 const cardMetrics = new Set(['net', 'ret', 'amount'])
 
+// Historical HTML snapshots used the visible label for "all" and a different
+// sort-direction key. Normalize only the UI state; keep the frozen bundle intact.
+export function normalizeCandidateFilters(saved = {}) {
+  return {
+    search: '', filter: 'all', direction: 'all', sort: 'default',
+    ...saved,
+    filter: saved.filter === '全部' ? 'all' : saved.filter || 'all',
+    sortDirection: saved.sortDirection || saved.sortOrder || 'desc',
+  }
+}
+
 export function filterCandidates(cards, { query = '', label = 'all', direction = 'all', order = 'default',
   orderDirection = 'desc', stateChange = 'all', stateContinuity = 'all', stateView = null,
   focusOnly = false } = {}) {
