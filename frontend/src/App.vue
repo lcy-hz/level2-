@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
 import { dates, report, reportStatus, saveSnapshot, snapshot, snapshots, startReportBuild, stateMeta } from './api.js'
 import { adjacentTradingDay, describeDateStatus, initialReportDay, observationWindow } from './tradingDays.js'
 import { normalizeCandidateFilters } from './candidateFilters.js'
+import { evidencePanelKey } from './interactionIdentity.js'
 import MarketTimeline from './components/MarketTimeline.vue'
 import QualitySummary from './components/QualitySummary.vue'
 import CandidatePanel from './components/CandidatePanel.vue'
@@ -21,6 +22,7 @@ const maxWindow = ref(60)
 const stagedWindow = ref(null)
 const saved = ref([])
 const document = ref(null)
+const loadedDocumentSequence = ref(0)
 const busy = ref(false)
 const error = ref('')
 const saving = ref(false)
@@ -57,7 +59,7 @@ let failedLoad = null
 const current = computed(() => document.value?.report?.markets?.at(-1) || null)
 // Key on the document that has finished loading, not the requested selection.
 // Otherwise a same-day snapshot switch can retain the previous filters/dialogs.
-const panelKey = computed(() => document.value?.id || `${document.value?.mode}:${document.value?.day}`)
+const panelKey = computed(() => evidencePanelKey(document.value, loadedDocumentSequence.value))
 const sourceStatus = computed(() => dateRows.value.find(row => row.day === targetDay.value))
 const previousDay = computed(() => adjacentTradingDay(tradingDays.value, document.value?.day, -1))
 const nextDay = computed(() => adjacentTradingDay(tradingDays.value, document.value?.day, 1))
@@ -84,6 +86,8 @@ async function load({ day = selectedDay.value, key = snapshotId.value } = {}) {
     const result = key ? await snapshot(key) : await report(day)
     if (id !== request) return
     document.value = result
+    // A rebuilt report for the same day has a new evidence identity even if its URL is unchanged.
+    loadedDocumentSequence.value++
     snapshotId.value = key
     selectedDay.value = result.day
     targetDay.value = result.day

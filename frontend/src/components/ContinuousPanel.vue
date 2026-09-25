@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { startState, stateView } from '../api.js'
 import { filterContinuousStocks, parseAdvancedFilters } from '../continuousFilters.js'
 import { flowNarrative, observedTransitions } from '../continuousEvidence.js'
+import { requestGeneration } from '../interactionIdentity.js'
 import { useEvidencePending } from '../evidencePending.js'
 import KlineTrigger from './KlineTrigger.vue'
 import StateEventPanel from './StateEventPanel.vue'
@@ -36,7 +37,7 @@ const defaultAdvanced = () => ({ preset: 'all', price: 'all', amountMin: '', amo
 const advancedRaw = ref({ ...defaultAdvanced(), ...(props.initialUi.advanced || {}) })
 const advanced = computed(() => parseAdvancedFilters(advancedRaw.value))
 const page = ref(props.initialUi.page || 1)
-let sequence = 0
+const requests = requestGeneration()
 let timer = null
 const view = computed(() => document.value?.view || document.value)
 const names = computed(() => Object.fromEntries(props.cards.map(card => [card.code, card.name])))
@@ -74,6 +75,12 @@ const improvementText = record => record?.comparisons == null ? '不适用' : `$
 const label = { improve: '↑ 改善', worsen: '↓ 恶化', flat: '→ 持平', unknown: '— 未知' }
 function resetFilter(value) { change.value = value; page.value = 1 }
 function stageWindow(value) {
+  // A staged window supersedes any in-flight read or calculation. The server job may
+  // finish, but its response must never become the applied view for this selection.
+  requests.invalidate()
+  clearTimeout(timer)
+  pending.value = false
+  reading.value = false
   windowDays.value = value
   emit('window-staged', value)
   status.value = `待应用 ${value} 个交易日；${view.value ? `当前仍展示 ${view.value.window} 日结果` : '尚无已应用结果'}`
@@ -112,7 +119,7 @@ async function apply() {
     emit('view-applied', { window: days, view: saved.view || saved })
     return
   }
-  const id = ++sequence
+  const id = requests.begin()
   clearTimeout(timer)
   pending.value = true
   status.value = `正在计算 ${days} 个交易日；${view.value ? '仍展示上次结果' : '暂无结果'}`
@@ -120,13 +127,13 @@ async function apply() {
     await startState(props.day, days)
     await poll(id, days)
   } catch (error) {
-    if (id === sequence) { pending.value = false; status.value = `计算失败：${error.message}；${view.value ? '仍展示上次结果' : '暂无结果'}` }
+    if (requests.accepts(id)) { pending.value = false; status.value = `计算失败：${error.message}；${view.value ? '仍展示上次结果' : '暂无结果'}` }
   }
 }
 async function poll(id, days) {
-  if (id !== sequence) return
+  if (!requests.accepts(id)) return
   const response = await stateView(props.day, days)
-  if (id !== sequence) return
+  if (!requests.accepts(id)) return
   if (response.status === 'done') {
     document.value = response
     pending.value = false
@@ -138,7 +145,7 @@ async function poll(id, days) {
   } else if (response.status === 'queued' || response.status === 'running') {
     status.value = `${response.message}；${view.value ? '仍展示上次结果' : '暂无结果'}`
     timer = setTimeout(() => poll(id, days).catch(error => {
-      if (id === sequence) { pending.value = false; reading.value = false; status.value = `读取失败：${error.message}；仍保留上次结果` }
+      if (requests.accepts(id)) { pending.value = false; reading.value = false; status.value = `读取失败：${error.message}；仍保留上次结果` }
     }), 1500)
   } else {
     pending.value = false
@@ -151,12 +158,14 @@ onMounted(() => {
   // Reuse an already-calculated default window without starting a raw-data scan.
   status.value = `正在读取已有的 ${windowDays.value} 日连续状态；不会自动发起原始 Level-2 计算`
   reading.value = true
-  poll(++sequence, Number(windowDays.value)).catch(error => {
+  const id = requests.begin()
+  poll(id, Number(windowDays.value)).catch(error => {
+    if (!requests.accepts(id)) return
     reading.value = false
     status.value = `已有状态读取失败：${error.message}；可手动应用观察窗口重试`
   })
 })
-onBeforeUnmount(() => { sequence++; clearTimeout(timer) })
+onBeforeUnmount(() => { requests.invalidate(); clearTimeout(timer) })
 </script>
 
 <template>
