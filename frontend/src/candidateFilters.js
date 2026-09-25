@@ -9,6 +9,13 @@ const stateMetric = {
 }
 const cardMetrics = new Set(['net', 'ret', 'amount'])
 
+export function priceDirection(sign) {
+  if (sign === 1) return { text: '↑ 上涨', tone: 'positive' }
+  if (sign === -1) return { text: '↓ 下跌', tone: 'negative' }
+  if (sign === 0) return { text: '— 平盘', tone: 'neutral' }
+  return { text: '— 未知', tone: 'unknown' }
+}
+
 // Historical HTML snapshots used the visible label for "all" and a different
 // sort-direction key. Normalize only the UI state; keep the frozen bundle intact.
 export function normalizeCandidateFilters(saved = {}) {

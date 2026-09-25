@@ -1,12 +1,19 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { filterCandidates, normalizeCandidateFilters, stateNarrative } from '../src/candidateFilters.js'
+import { filterCandidates, normalizeCandidateFilters, priceDirection, stateNarrative } from '../src/candidateFilters.js'
 
 const rows = [
   { code: '000001.SZ', name: '甲', label: '主动', returnSign: 1, net: 10 },
   { code: '000002.SZ', name: '乙', label: '被动', returnSign: -1, net: null },
   { code: '000003.SZ', name: '丙', label: '主动', returnSign: 1, net: 20 },
 ]
+
+test('candidate price direction distinguishes flat from missing evidence', () => {
+  assert.equal(priceDirection(1).text, '↑ 上涨')
+  assert.equal(priceDirection(-1).text, '↓ 下跌')
+  assert.equal(priceDirection(0).text, '— 平盘')
+  assert.equal(priceDirection(null).text, '— 未知')
+})
 
 test('historical snapshot filter labels restore without changing the frozen bundle', () => {
   const saved = { search: '000001', filter: '全部', direction: 'all', sort: 'net', sortOrder: 'asc' }
