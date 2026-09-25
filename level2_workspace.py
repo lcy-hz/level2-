@@ -306,11 +306,9 @@ class Workspace:
         states=self.state.frozen(request.get('states',{}),day)
         state_window=request.get('stateWindow')
         if state_window is not None and str(state_window) not in states:raise ValueError('选中的观察窗口未冻结')
-        # Derive from verified receipts with the identical pure model used by the page.
-        views={}
-        if states:
-            process=subprocess.run(['node','-e',"const m=require(process.argv[1]);let s='';process.stdin.on('data',x=>s+=x);process.stdin.on('end',()=>process.stdout.write(JSON.stringify(Object.fromEntries(Object.entries(JSON.parse(s)).map(([k,v])=>[k,m.derive(v)])))));",str(self.base/'level2_state_view.js')],input=encoded(states),text=True,capture_output=True,timeout=30,check=True)
-            views=json.loads(process.stdout)
+        # API and frozen snapshots use one Python presentation calculation.
+        from level2_state_view import derive
+        views={key:derive(value) for key,value in states.items()}
         context={'mode':'snapshot','day':day,'id':identifier,'savedAt':saved,'charts':charts,'filters':filters,'continuousUI':continuous_ui,'states':states,'stateWindow':state_window}
         context['stateViews']=views
         pattern_result=None

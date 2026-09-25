@@ -24,6 +24,8 @@ python level2_detail_server.py
 
 新报告保存在 `.level2_reports/<日期>/report.json`，不再生成旧 HTML 页面；正式报告缺少 JSON 时必须重新计算，不回退读取旧 HTML。新快照只生成带完整性校验的 JSON 包；已有 HTML 快照仍可通过数据接口只读解析，原文件不删除，也不会在浏览器中展示旧界面。旧报告书签重定向至统一的 Vue 入口。
 
+连续观察的实时接口与新快照均由 `level2_state_view.py` 派生同一份展示正文；保存快照不再启动 Node.js 或读取已移除的旧页面 JS 模型。快照只使用已验证、已加载的状态凭据，旧快照缺字段时仍保持未保存，不补用当前数据。
+
 新报告的股票记录按代码固定排序；历史快照保持保存时的记录顺序。旧生成器的查询未指定股票顺序，已保存的两个旧快照中重点股首序不同，因此不存在可稳定复现的单一“旧页默认顺序”。默认顺序不是候选强度排名；需要按涨跌幅、主动净额等排序时应明确选择指标。
 
 需要前端开发热更新时，另开终端运行 `cd frontend && npm run dev`，访问 http://127.0.0.1:5173/ 。Vite 只向本机 `127.0.0.1:18762` 代理 `/api`，不直接读取原始 Level-2 文件。
@@ -102,7 +104,6 @@ python level2_validation.py --start 20260907 --end 20260918 --asof 20260923 --sp
 ```sh
 python -m unittest discover -p 'test_level2*.py'
 python validate_level2_report.py
-node test_level2_state_view.js
 cd frontend && npm test && npm run build
 ```
 

@@ -27,10 +27,8 @@
 !/level2_limitup_study.py
 !/level2_limitup_sources.example.json
 !/level2_state_view.py
-!/level2_state_view.js
 !/level2_patterns.py
 !/个股形态识别设计.md
-!/test_level2_state_view.js
 !/level2_research.example.json
 !/calibrate_level2_direction.py
 !/Level2方向校准说明.md

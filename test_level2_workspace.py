@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 from level2_workspace import Workspace, BASE, digest, report_sources_match, validate_continuous_ui
+from level2_state_view import derive
 
 
 class WorkspaceTests(unittest.TestCase):
@@ -169,8 +170,6 @@ class WorkspaceTests(unittest.TestCase):
             self.w.snapshot_document(saved['id'])
 
     def test_snapshot_freezes_shared_presentation_from_verified_states(self):
-        model=Path(__file__).with_name('level2_state_view.js')
-        (self.base/model.name).write_text(model.read_text())
         states={'1':{'day':'20260907','window':1,
                      'benchmark':{'status':'AVAILABLE','code':'000300.SH','name':'沪深300价格指数',
                                   'returnPct':1,'source':'/test/index.csv'},
@@ -185,9 +184,11 @@ class WorkspaceTests(unittest.TestCase):
                                             'sizeFlowPercentile':None,'liquidityGroup':1,'liquidityGroupCount':1,
                                             'liquidityPeerCount':1,'liquidityFlowPercentile':None,
                                             'history':[{'day':'20260907','amount':100,'net':10,'ratio':10,'unknown':0,'priceDailyReturn':2}]}}}}
-        with patch.object(self.w.state,'frozen',return_value=states):
+        with patch.object(self.w.state,'frozen',return_value=states), \
+             patch('level2_workspace.subprocess.run',side_effect=AssertionError('snapshot must not launch Node')):
             result=self.w.save({'day':'20260907','data':self.data,'stateWindow':1})
         bundle=json.loads((self.w.snapshot_path(result['id'])/'bundle.json').read_text())
+        self.assertEqual(bundle['stateViews']['1'],derive(states['1']))
         self.assertEqual(bundle['stateViews']['1']['trajectory'][0]['ratio'],10)
         self.assertEqual(bundle['stateViews']['1']['marketState']['status'],'AVAILABLE')
         self.assertEqual(bundle['stateViews']['1']['marketState']['latestRatio'],10)

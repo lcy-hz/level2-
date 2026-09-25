@@ -117,7 +117,7 @@ def derive(result):
     minute_sources=result.get('minuteSources')
     return {'method':'common-cohort-weighted-flow-and-breadth','eventMethod':result.get('eventMethod'),
             'benchmark':result.get('benchmark'),'peers':result.get('peers'),
-            'minuteSources':minute_sources,'minuteObserved':sum(stock.get('observedMinuteCloseDrawdown',{}).get('status')=='OBSERVED' for stock in stocks) if minute_sources is not None else None,
+            'minuteSources':minute_sources,'minuteObserved':sum((stock.get('observedMinuteCloseDrawdown') or {}).get('status')=='OBSERVED' for stock in stocks) if minute_sources is not None else None,
             'day':result.get('day'),'window':result['window'],
             'dates':dates,'total':len(rows),'common':len(common),'priceCommon':len(price_common),'trajectory':trajectory,
             'marketState':market_state(trajectory,result['window'],len(common)),

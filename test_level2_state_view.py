@@ -1,7 +1,4 @@
 import unittest
-import json
-import subprocess
-from pathlib import Path
 from level2_state_view import derive
 
 
@@ -74,7 +71,7 @@ class StateViewTests(unittest.TestCase):
         self.assertEqual(one['priceState']['status'],'AVAILABLE')
         self.assertIsNone(one['priceState']['upShareDeltaPP'])
 
-    def test_matches_legacy_presentation_model_on_contract_fixture(self):
+    def test_frozen_model_keeps_source_and_missing_evidence(self):
         result={'day':'20260922','window':2,'eventMethod':'日级事件口径',
                 'minuteSources':[{'day':'20260921','status':'READY'},{'day':'20260922','status':'READY'}],
                 'benchmark':{'status':'AVAILABLE','code':'000300.SH','name':'沪深300价格指数',
@@ -83,38 +80,27 @@ class StateViewTests(unittest.TestCase):
                 'sources':[{'day':'20260921','status':'LEGACY_CALIBRATED_ROW_GUARD','source':'/tmp/a.parquet','priceStatus':'FILE_PRESENT','priceSource':'/tmp/a.csv'},
                            {'day':'20260922','status':'NATIVE','source':'/tmp/b.parquet','priceStatus':'FILE_PRESENT','priceSource':'/tmp/b.csv'}], 'states':{
             'A':{'observedMinuteCloseDrawdown':{'status':'OBSERVED','valuePct':-3},'history':[dict(row('20260921',100,-10),priceDailyReturn=2),dict(row('20260922',100,10),priceDailyReturn=-1)]},
-            'B':{'history':[dict(row('20260921',900,20),priceDailyReturn=-1),dict(row('20260922',900,10),priceDailyReturn=3)]},
+            'B':{'observedMinuteCloseDrawdown':None,'history':[dict(row('20260921',900,20),priceDailyReturn=-1),dict(row('20260922',900,10),priceDailyReturn=3)]},
             'C':{'history':[dict(row('20260921',50,None),priceDailyReturn=0),dict(row('20260922',50,5),priceDailyReturn=None)]}}}
-        script="const m=require(process.argv[1]);let s='';process.stdin.on('data',x=>s+=x);process.stdin.on('end',()=>process.stdout.write(JSON.stringify(m.derive(JSON.parse(s)))));"
-        output=subprocess.run(['node','-e',script,str(Path(__file__).with_name('level2_state_view.js'))],
-                              input=json.dumps(result),text=True,capture_output=True,check=True,timeout=10)
-        old=json.loads(output.stdout);new=derive(result)
-        self.assertEqual(new['counts'],old['counts'])
-        self.assertEqual(new['eventMethod'],old['eventMethod'])
-        self.assertEqual(new['benchmark'],old['benchmark'])
-        self.assertEqual(new['peers'],old['peers'])
-        self.assertEqual(new['minuteSources'],old['minuteSources'])
-        self.assertEqual(new['minuteObserved'],old['minuteObserved'])
-        self.assertEqual(new['minuteObserved'],1)
-        self.assertEqual(new['common'],old['common'])
-        self.assertEqual(new['priceCommon'],old['priceCommon'])
-        self.assertEqual(new['priceState'],old['priceState'])
-        self.assertEqual(new['marketState']['ratioPersistence'],old['marketState']['ratioPersistence'])
-        self.assertEqual(new['marketState']['breadthPersistence'],old['marketState']['breadthPersistence'])
-        self.assertEqual(new['marketState']['ratioImprovement'],old['marketState']['ratioImprovement'])
-        for key in ['latestRatio','latestBuyShare','ratioDeltaPP','buyShareDeltaPP','ratioSlopePPPerDay','buyShareSlopePPPerDay']:
-            self.assertAlmostEqual(new['marketState'][key],old['marketState'][key])
-        self.assertEqual([row['code'] for row in new['stocks']],[row['code'] for row in old['stocks']])
-        for a,b in zip(new['trajectory'],old['trajectory']):
-            self.assertEqual(a['amountCoverage'],b['amountCoverage'])
-            self.assertEqual(a['directionCoverage'],b['directionCoverage'])
-            self.assertEqual(a['sourceStatus'],b['sourceStatus'])
-            self.assertEqual(a['sourceFile'],b['sourceFile'])
-            self.assertEqual(a['priceSourceFile'],b['priceSourceFile'])
-            self.assertEqual(a['priceCoverage'],b['priceCoverage'])
-            self.assertEqual(a['priceUpShare'],b['priceUpShare'])
-            self.assertEqual(a['commonAmount'],b['commonAmount'])
-            self.assertAlmostEqual(a['ratio'],b['ratio'])
+        view=derive(result)
+        self.assertEqual(view['eventMethod'],'日级事件口径')
+        self.assertEqual(view['benchmark'],result['benchmark'])
+        self.assertEqual(view['peers'],result['peers'])
+        self.assertEqual(view['minuteSources'],result['minuteSources'])
+        self.assertEqual(view['minuteObserved'],1)
+        self.assertEqual((view['common'],view['priceCommon']),(2,2))
+        self.assertEqual(view['counts'],{'improve':1,'worsen':1,'flat':0,'unknown':1,'toBuy':1,'toSell':0})
+        self.assertEqual([stock['code'] for stock in view['stocks']],['A','B','C'])
+        self.assertEqual([day['sourceFile'] for day in view['trajectory']],['/tmp/a.parquet','/tmp/b.parquet'])
+        self.assertEqual([day['priceSourceFile'] for day in view['trajectory']],['/tmp/a.csv','/tmp/b.csv'])
+        self.assertEqual([day['amountCoverage'] for day in view['trajectory']],[3,3])
+        self.assertEqual([day['directionCoverage'] for day in view['trajectory']],[2,3])
+        self.assertEqual([day['priceCoverage'] for day in view['trajectory']],[3,2])
+        self.assertEqual([day['commonAmount'] for day in view['trajectory']],[1000,1000])
+        self.assertEqual([day['ratio'] for day in view['trajectory']],[17,10])
+        self.assertEqual(view['marketState']['ratioSlopePPPerDay'],-7)
+        self.assertEqual(view['marketState']['ratioPersistence'],{'side':1,'days':2,'leftCensored':True})
+        self.assertEqual(view['priceState']['upShareSlopePPPerDay'],0)
 
 
 if __name__=='__main__':unittest.main()
